@@ -66,7 +66,7 @@ changed file is recompiled):
 ```bash
 cd ~/kbuild-a2/linux-6.14
 nano kernel/fork_guard.c
-make -j4                    # recompiles the file and relinks the kernel
+make -j4                    # recompiles the file and relinks the kernel (~4 min)
 sudo make install           # copies vmlinuz to /boot, updates initramfs and GRUB
 sudo reboot
 ```
