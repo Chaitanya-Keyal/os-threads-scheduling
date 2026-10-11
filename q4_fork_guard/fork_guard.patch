@@ -1,0 +1,657 @@
+diff -ruN a/include/linux/fork_guard.h b/include/linux/fork_guard.h
+--- a/include/linux/fork_guard.h	1970-01-01 00:00:00.000000000 +0000
++++ b/include/linux/fork_guard.h	2026-10-11 10:30:06.001967244 +0000
+@@ -0,0 +1,24 @@
++/* SPDX-License-Identifier: GPL-2.0 */
++/*
++ * Fork storm containment (kernel/fork_guard.c) and tiered CPU scheduling
++ * (kernel/sched_tier.c).
++ */
++#ifndef _LINUX_FORK_GUARD_H
++#define _LINUX_FORK_GUARD_H
++
++#include <linux/types.h>
++#include <linux/uidgid.h>
++
++struct kernel_clone_args;
++struct task_struct;
++
++/* Called from kernel_clone(): 0 to allow the fork, -EAGAIN to refuse it. */
++int fg_check_fork(struct kernel_clone_args *args);
++
++/* Called from commit_creds() when a task's real uid changes. */
++void st_cred_changed(struct task_struct *task, kuid_t old_uid, kuid_t new_uid);
++
++/* "GOLD", "SILVER" or "BRONZE", for /proc/fork_guard. */
++const char *st_tier_name(kuid_t uid);
++
++#endif /* _LINUX_FORK_GUARD_H */
+diff -ruN a/kernel/Makefile b/kernel/Makefile
+--- a/kernel/Makefile	2026-10-11 10:18:23.806089633 +0000
++++ b/kernel/Makefile	2026-10-11 10:30:05.988311711 +0000
+@@ -10,7 +10,8 @@
+ 	    extable.o params.o \
+ 	    kthread.o sys_ni.o nsproxy.o \
+ 	    notifier.o ksysfs.o cred.o reboot.o \
+-	    async.o range.o smpboot.o ucount.o regset.o ksyms_common.o
++	    async.o range.o smpboot.o ucount.o regset.o ksyms_common.o \
++	    fork_guard.o sched_tier.o
+ 
+ obj-$(CONFIG_USERMODE_DRIVER) += usermode_driver.o
+ obj-$(CONFIG_MULTIUSER) += groups.o
+diff -ruN a/kernel/cred.c b/kernel/cred.c
+--- a/kernel/cred.c	2026-10-11 10:18:23.806063618 +0000
++++ b/kernel/cred.c	2026-10-11 10:30:05.988225222 +0000
+@@ -9,6 +9,7 @@
+ 
+ #include <linux/export.h>
+ #include <linux/cred.h>
++#include <linux/fork_guard.h>
+ #include <linux/slab.h>
+ #include <linux/sched.h>
+ #include <linux/sched/coredump.h>
+@@ -453,6 +454,10 @@
+ 	    !gid_eq(new->fsgid, old->fsgid))
+ 		proc_id_connector(task, PROC_EVENT_GID);
+ 
++	/* a task that changes user takes the new user's CPU tier */
++	if (!uid_eq(new->uid, old->uid))
++		st_cred_changed(task, old->uid, new->uid);
++
+ 	/* release the old obj and subj refs both */
+ 	put_cred_many(old, 2);
+ 	return 0;
+diff -ruN a/kernel/fork.c b/kernel/fork.c
+--- a/kernel/fork.c	2026-10-11 10:18:23.805969871 +0000
++++ b/kernel/fork.c	2026-10-11 10:30:05.986099644 +0000
+@@ -72,6 +72,7 @@
+ #include <linux/ksm.h>
+ #include <linux/acct.h>
+ #include <linux/userfaultfd_k.h>
++#include <linux/fork_guard.h>
+ #include <linux/tsacct_kern.h>
+ #include <linux/cn_proc.h>
+ #include <linux/freezer.h>
+@@ -2794,6 +2795,11 @@
+ 	    (args->pidfd == args->parent_tid))
+ 		return -EINVAL;
+ 
++	/* fork storm containment: may refuse the fork with -EAGAIN */
++	nr = fg_check_fork(args);
++	if (nr)
++		return nr;
++
+ 	/*
+ 	 * Determine whether and which event to report to ptracer.  When
+ 	 * called from kernel_thread or CLONE_UNTRACED is explicitly
+diff -ruN a/kernel/fork_guard.c b/kernel/fork_guard.c
+--- a/kernel/fork_guard.c	1970-01-01 00:00:00.000000000 +0000
++++ b/kernel/fork_guard.c	2026-10-11 10:30:05.988368597 +0000
+@@ -0,0 +1,327 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * fork_guard: graduated fork-rate containment, per user.
++ *
++ * Every process creation (fork, vfork, clone without CLONE_THREAD) by a
++ * non-root user is counted in a sliding window of fg_window_ms. When the
++ * count goes over fg_threshold the user climbs a ladder:
++ *
++ *   stage 1 THROTTLE  over-threshold forks fail with -EAGAIN after a
++ *                     penalty delay of fg_throttle_ms
++ *   stage 2 FREEZE    still over the threshold fg_escalate_ms later:
++ *                     SIGSTOP the process group of the forking task
++ *   stage 3 REAP      still over the threshold fg_escalate_ms after the
++ *                     freeze: SIGKILL that group, then start again at 0
++ *
++ * A user whose rate stays normal for fg_cooldown_s is forgiven (stage 0).
++ * Root is never counted. The tier of a user is only shown in /proc and is
++ * never looked at here, so tiers cannot weaken containment.
++ */
++#include <linux/cred.h>
++#include <linux/delay.h>
++#include <linux/fork_guard.h>
++#include <linux/ktime.h>
++#include <linux/math64.h>
++#include <linux/pid.h>
++#include <linux/proc_fs.h>
++#include <linux/sched.h>
++#include <linux/sched/signal.h>
++#include <linux/sched/task.h>
++#include <linux/seq_file.h>
++#include <linux/spinlock.h>
++#include <linux/sysctl.h>
++#include <linux/workqueue.h>
++
++#define FG_MAX_USERS 64
++#define FG_SLOTS 10 /* the window is counted in 10 slots */
++
++/* Tunables, under /proc/sys/kernel/. */
++static int fg_enabled = 1;
++static int fg_threshold = 200;
++static int fg_window_ms = 1000;
++static int fg_throttle_ms = 40;
++static int fg_cooldown_s = 10;
++static int fg_escalate_ms = 200;
++
++struct fg_user {
++	bool used;
++	kuid_t uid;
++	s64 slot_width;			/* ms per slot when the slots were filled */
++	s64 slot_id[FG_SLOTS];		/* which time slot each counter holds */
++	int slot_count[FG_SLOTS];
++	int stage;			/* 0 normal, 1 throttled, 2 frozen */
++	s64 stage_since;		/* ms */
++	s64 last_violation;		/* ms */
++	unsigned int throttles, freezes, reaps;
++	struct pid *frozen;		/* the group that got SIGSTOP */
++	struct delayed_work reap_work;	/* decides REAP or forgive after FREEZE */
++};
++
++static struct fg_user fg_users[FG_MAX_USERS];
++static DEFINE_SPINLOCK(fg_lock);	/* protects fg_users[] */
++
++static s64 now_ms(void)
++{
++	return ktime_to_ms(ktime_get());
++}
++
++static unsigned int uid_nr(const struct fg_user *u)
++{
++	return from_kuid(&init_user_ns, u->uid);
++}
++
++/* Forks in the last fg_window_ms, optionally counting one more first. */
++static int fg_count(struct fg_user *u, s64 now, bool add)
++{
++	s64 width = max(fg_window_ms / FG_SLOTS, 1);
++	s64 slot = div64_s64(now, width);
++	int i, sum = 0;
++
++	if (u->slot_width != width) {	/* window length changed: restart */
++		memset(u->slot_id, 0, sizeof(u->slot_id));
++		memset(u->slot_count, 0, sizeof(u->slot_count));
++		u->slot_width = width;
++	}
++	if (add) {
++		i = slot % FG_SLOTS;
++		if (u->slot_id[i] != slot) {
++			u->slot_id[i] = slot;
++			u->slot_count[i] = 0;
++		}
++		u->slot_count[i]++;
++	}
++	for (i = 0; i < FG_SLOTS; i++)
++		if (u->slot_id[i] > slot - FG_SLOTS)
++			sum += u->slot_count[i];
++	return sum;
++}
++
++static struct fg_user *fg_find(kuid_t uid, bool create)
++{
++	struct fg_user *free = NULL;
++	int i;
++
++	for (i = 0; i < FG_MAX_USERS; i++) {
++		if (fg_users[i].used && uid_eq(fg_users[i].uid, uid))
++			return &fg_users[i];
++		if (!fg_users[i].used && !free)
++			free = &fg_users[i];
++	}
++	if (!create || !free)
++		return NULL;	/* table full: the user is not tracked */
++	free->used = true;
++	free->uid = uid;
++	free->slot_width = 0;
++	return free;
++}
++
++/* A throttled user who stayed under the threshold long enough. */
++static void fg_try_forgive(struct fg_user *u, s64 now)
++{
++	if (u->stage == 1 &&
++	    now - u->last_violation >= (s64)fg_cooldown_s * MSEC_PER_SEC) {
++		u->stage = 0;
++		pr_info("fork_guard: FORGIVE uid=%u (quiet for %d s, back to stage 0)\n",
++			uid_nr(u), fg_cooldown_s);
++	}
++}
++
++int fg_check_fork(struct kernel_clone_args *args)
++{
++	kuid_t uid = current_uid();
++	struct pid *pgrp, *stop = NULL;
++	struct fg_user *u;
++	bool leader;
++	s64 now;
++
++	if (!fg_enabled || (args->flags & CLONE_THREAD) ||
++	    (current->flags & PF_KTHREAD) || uid_eq(uid, GLOBAL_ROOT_UID))
++		return 0;
++
++	rcu_read_lock();
++	pgrp = get_pid(task_pgrp(current));
++	leader = task_pgrp(current) == task_pid(current);
++	rcu_read_unlock();
++
++	now = now_ms();
++	spin_lock(&fg_lock);
++	u = fg_find(uid, true);
++	if (!u || fg_count(u, now, true) <= fg_threshold) {
++		if (u)
++			fg_try_forgive(u, now);
++		spin_unlock(&fg_lock);
++		put_pid(pgrp);
++		return 0;
++	}
++
++	u->last_violation = now;
++	if (u->stage == 0) {
++		u->stage = 1;
++		u->stage_since = now;
++		u->throttles++;
++		pr_info("fork_guard: THROTTLE uid=%u pgid=%d (>%d forks in %d ms)\n",
++			uid_nr(u), pid_nr(pgrp), fg_threshold, fg_window_ms);
++	} else if (u->stage == 1 && now - u->stage_since >= fg_escalate_ms &&
++		   !leader) {
++		/*
++		 * A group leader (e.g. the user's shell starting a command) does
++		 * not trigger the freeze; the bomb's many other members will.
++		 */
++		u->stage = 2;
++		u->stage_since = now;
++		u->freezes++;
++		u->frozen = get_pid(pgrp);
++		stop = pgrp;
++		schedule_delayed_work(&u->reap_work,
++				      msecs_to_jiffies(fg_escalate_ms));
++		pr_info("fork_guard: FREEZE   uid=%u pgid=%d (SIGSTOP process group)\n",
++			uid_nr(u), pid_nr(pgrp));
++	}
++	spin_unlock(&fg_lock);
++
++	if (stop)
++		kill_pgrp(stop, SIGSTOP, 1);
++	put_pid(pgrp);
++	msleep_interruptible(fg_throttle_ms);
++	return -EAGAIN;
++}
++
++/* Runs fg_escalate_ms after a FREEZE (and again later if needed). */
++static void fg_reap_work(struct work_struct *work)
++{
++	struct fg_user *u = container_of(to_delayed_work(work), struct fg_user,
++					 reap_work);
++	struct pid *grp = NULL;
++	s64 now = now_ms();
++	int sig = 0;
++
++	spin_lock(&fg_lock);
++	if (u->stage != 2)
++		goto out;
++	if (fg_count(u, now, false) > fg_threshold) {
++		sig = SIGKILL;
++		u->reaps++;
++		pr_info("fork_guard: REAP     uid=%u pgid=%d (SIGKILL process group)\n",
++			uid_nr(u), pid_nr(u->frozen));
++		/* the offender is gone; start the user again from a clean slate */
++		u->slot_width = 0;
++		u->stage = 0;
++	} else if (now - u->last_violation >=
++		   (s64)fg_cooldown_s * MSEC_PER_SEC) {
++		sig = SIGCONT;
++		pr_info("fork_guard: FORGIVE uid=%u pgid=%d (SIGCONT, back to stage 0)\n",
++			uid_nr(u), pid_nr(u->frozen));
++		u->stage = 0;
++	} else {
++		schedule_delayed_work(&u->reap_work,
++				      msecs_to_jiffies(fg_escalate_ms));
++	}
++	if (sig) {
++		grp = u->frozen;
++		u->frozen = NULL;
++	}
++out:
++	spin_unlock(&fg_lock);
++	if (grp) {
++		kill_pgrp(grp, sig, 1);
++		put_pid(grp);
++	}
++}
++
++static int fg_show(struct seq_file *m, void *v)
++{
++	s64 now = now_ms();
++	int i;
++
++	seq_printf(m, "enabled=%d threshold=%d window_ms=%d throttle_ms=%d cooldown_s=%d escalate_ms=%d\n\n",
++		   fg_enabled, fg_threshold, fg_window_ms, fg_throttle_ms,
++		   fg_cooldown_s, fg_escalate_ms);
++	seq_puts(m, "UID     TIER    FORKS   STAGE   THROTTLE  FREEZE  REAP\n");
++	spin_lock(&fg_lock);
++	for (i = 0; i < FG_MAX_USERS; i++) {
++		struct fg_user *u = &fg_users[i];
++
++		if (!u->used)
++			continue;
++		fg_try_forgive(u, now);
++		seq_printf(m, "%-7u %-7s %-7d %-7d %-9u %-7u %u\n", uid_nr(u),
++			   st_tier_name(u->uid), fg_count(u, now, false),
++			   u->stage, u->throttles, u->freezes, u->reaps);
++	}
++	spin_unlock(&fg_lock);
++	return 0;
++}
++
++static int fg_ten = 10, fg_minute_ms = 60000, fg_second_ms = 1000,
++	   fg_hour_s = 3600;
++
++static const struct ctl_table fg_sysctls[] = {
++	{
++		.procname	= "fg_enabled",
++		.data		= &fg_enabled,
++		.maxlen		= sizeof(int),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= SYSCTL_ZERO,
++		.extra2		= SYSCTL_ONE,
++	},
++	{
++		.procname	= "fg_threshold",
++		.data		= &fg_threshold,
++		.maxlen		= sizeof(int),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= SYSCTL_ONE,
++		.extra2		= SYSCTL_INT_MAX,
++	},
++	{
++		.procname	= "fg_window_ms",
++		.data		= &fg_window_ms,
++		.maxlen		= sizeof(int),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= &fg_ten,
++		.extra2		= &fg_minute_ms,
++	},
++	{
++		.procname	= "fg_throttle_ms",
++		.data		= &fg_throttle_ms,
++		.maxlen		= sizeof(int),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= SYSCTL_ZERO,
++		.extra2		= &fg_second_ms,
++	},
++	{
++		.procname	= "fg_cooldown_s",
++		.data		= &fg_cooldown_s,
++		.maxlen		= sizeof(int),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= SYSCTL_ZERO,
++		.extra2		= &fg_hour_s,
++	},
++	{
++		.procname	= "fg_escalate_ms",
++		.data		= &fg_escalate_ms,
++		.maxlen		= sizeof(int),
++		.mode		= 0644,
++		.proc_handler	= proc_dointvec_minmax,
++		.extra1		= SYSCTL_ZERO,
++		.extra2		= &fg_minute_ms,
++	},
++};
++
++static int __init fork_guard_init(void)
++{
++	int i;
++
++	for (i = 0; i < FG_MAX_USERS; i++)
++		INIT_DELAYED_WORK(&fg_users[i].reap_work, fg_reap_work);
++	register_sysctl("kernel", fg_sysctls);
++	proc_create_single("fork_guard", 0444, NULL, fg_show);
++	pr_info("fork_guard: initialised (threshold=%d/%dms, throttle=%dms, cooldown=%ds)\n",
++		fg_threshold, fg_window_ms, fg_throttle_ms, fg_cooldown_s);
++	return 0;
++}
++late_initcall(fork_guard_init);
+diff -ruN a/kernel/sched_tier.c b/kernel/sched_tier.c
+--- a/kernel/sched_tier.c	1970-01-01 00:00:00.000000000 +0000
++++ b/kernel/sched_tier.c	2026-10-11 10:30:05.988421741 +0000
+@@ -0,0 +1,236 @@
++// SPDX-License-Identifier: GPL-2.0
++/*
++ * sched_tier: GOLD / SILVER / BRONZE CPU service tiers, per user.
++ *
++ * A tier is applied by setting the nice value of every task of the user,
++ * which selects the task's CFS load weight (sched_prio_to_weight[]):
++ *
++ *   GOLD   nice -7  weight 4904
++ *   SILVER nice  0  weight 1024   (everyone's default)
++ *   BRONZE nice +5  weight  335
++ *
++ * The bias is clamped to nice -7..+5 instead of the full -20..+19 so that
++ * BRONZE still makes progress next to GOLD: 335 / (4904 + 335) = ~6% of a
++ * shared core, where nice 19 against nice -20 would be 15 / 88776 = 0.02%.
++ *
++ * Root writes commands to /proc/sched_tier:
++ *   set <uid> gold|silver|bronze
++ *   reset
++ * At most one user is GOLD; making a new GOLD user demotes the old one.
++ */
++#include <linux/capability.h>
++#include <linux/cred.h>
++#include <linux/fork_guard.h>
++#include <linux/proc_fs.h>
++#include <linux/rcupdate.h>
++#include <linux/sched.h>
++#include <linux/sched/signal.h>
++#include <linux/seq_file.h>
++#include <linux/spinlock.h>
++#include <linux/string.h>
++#include <linux/uaccess.h>
++
++#define ST_MAX_USERS 64
++
++enum tier { SILVER, GOLD, BRONZE };
++
++static const char *const tier_name[] = { "SILVER", "GOLD", "BRONZE" };
++static const int tier_nice[] = { 0, -7, 5 };
++
++/* Only users that are not SILVER are stored. */
++static struct {
++	kuid_t uid;
++	enum tier tier;
++} st_users[ST_MAX_USERS];
++static int st_count;
++static DEFINE_SPINLOCK(st_lock);	/* protects st_users[] and st_count */
++
++static unsigned int uid_nr(kuid_t uid)
++{
++	return from_kuid(&init_user_ns, uid);
++}
++
++/* Caller holds st_lock. */
++static int st_index(kuid_t uid)
++{
++	int i;
++
++	for (i = 0; i < st_count; i++)
++		if (uid_eq(st_users[i].uid, uid))
++			return i;
++	return -1;
++}
++
++static enum tier st_tier(kuid_t uid)
++{
++	enum tier t;
++	int i;
++
++	spin_lock(&st_lock);
++	i = st_index(uid);
++	t = i < 0 ? SILVER : st_users[i].tier;
++	spin_unlock(&st_lock);
++	return t;
++}
++
++const char *st_tier_name(kuid_t uid)
++{
++	return tier_name[st_tier(uid)];
++}
++
++/*
++ * Re-nice every task (thread) of the user, so running jobs change share
++ * at once without being restarted.
++ */
++static void st_apply(kuid_t uid, enum tier t)
++{
++	struct task_struct *g, *p;
++
++	rcu_read_lock();
++	for_each_process_thread(g, p)
++		if (uid_eq(task_uid(p), uid))
++			set_user_nice(p, tier_nice[t]);
++	rcu_read_unlock();
++}
++
++/*
++ * A task switched user (e.g. sudo -u alice, su, login): give it the new
++ * user's tier. Untiered to untiered keeps the inherited nice value.
++ */
++void st_cred_changed(struct task_struct *task, kuid_t old_uid, kuid_t new_uid)
++{
++	enum tier t_new = st_tier(new_uid);
++
++	if (t_new != SILVER || st_tier(old_uid) != SILVER)
++		set_user_nice(task, tier_nice[t_new]);
++}
++
++static int st_set(kuid_t uid, enum tier t)
++{
++	kuid_t demoted = INVALID_UID;
++	int i, ret = 0;
++
++	spin_lock(&st_lock);
++	if (t == GOLD) {	/* at most one GOLD user */
++		for (i = 0; i < st_count; i++) {
++			if (st_users[i].tier == GOLD &&
++			    !uid_eq(st_users[i].uid, uid)) {
++				demoted = st_users[i].uid;
++				st_users[i] = st_users[--st_count];
++				break;
++			}
++		}
++	}
++	i = st_index(uid);
++	if (t == SILVER) {
++		if (i >= 0)
++			st_users[i] = st_users[--st_count];
++	} else if (i >= 0) {
++		st_users[i].tier = t;
++	} else if (st_count < ST_MAX_USERS) {
++		st_users[st_count].uid = uid;
++		st_users[st_count++].tier = t;
++	} else {
++		ret = -ENOSPC;
++	}
++	spin_unlock(&st_lock);
++	if (ret)
++		return ret;
++
++	if (uid_valid(demoted)) {
++		pr_info("sched_tier: uid=%u GOLD -> SILVER (only one GOLD user)\n",
++			uid_nr(demoted));
++		st_apply(demoted, SILVER);
++	}
++	pr_info("sched_tier: uid=%u -> %s (nice %d)\n", uid_nr(uid),
++		tier_name[t], tier_nice[t]);
++	st_apply(uid, t);
++	return 0;
++}
++
++static void st_reset(void)
++{
++	kuid_t uids[ST_MAX_USERS];
++	int i, n;
++
++	spin_lock(&st_lock);
++	n = st_count;
++	for (i = 0; i < n; i++)
++		uids[i] = st_users[i].uid;
++	st_count = 0;
++	spin_unlock(&st_lock);
++
++	for (i = 0; i < n; i++)
++		st_apply(uids[i], SILVER);
++	pr_info("sched_tier: all users reset to SILVER\n");
++}
++
++static int st_show(struct seq_file *m, void *v)
++{
++	int i;
++
++	seq_puts(m, "UID     TIER    NICE\n");
++	spin_lock(&st_lock);
++	for (i = 0; i < st_count; i++)
++		seq_printf(m, "%-7u %-7s %d\n", uid_nr(st_users[i].uid),
++			   tier_name[st_users[i].tier],
++			   tier_nice[st_users[i].tier]);
++	spin_unlock(&st_lock);
++	return 0;
++}
++
++static int st_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, st_show, NULL);
++}
++
++static ssize_t st_write(struct file *file, const char __user *ubuf,
++			size_t len, loff_t *ppos)
++{
++	char buf[64], name[8];
++	unsigned int id;
++	kuid_t uid;
++	int t, ret;
++
++	if (!capable(CAP_SYS_ADMIN))
++		return -EPERM;
++	if (len >= sizeof(buf))
++		return -EINVAL;
++	if (copy_from_user(buf, ubuf, len))
++		return -EFAULT;
++	buf[len] = '\0';
++
++	if (sysfs_streq(buf, "reset")) {
++		st_reset();
++		return len;
++	}
++	if (sscanf(buf, "set %u %7s", &id, name) != 2)
++		return -EINVAL;
++	uid = make_kuid(current_user_ns(), id);
++	if (!uid_valid(uid) || uid_eq(uid, GLOBAL_ROOT_UID))
++		return -EINVAL;	/* root is never tiered */
++	for (t = 0; t < ARRAY_SIZE(tier_name); t++)
++		if (!strcasecmp(name, tier_name[t]))
++			break;
++	if (t == ARRAY_SIZE(tier_name))
++		return -EINVAL;
++	ret = st_set(uid, t);
++	return ret ? ret : len;
++}
++
++static const struct proc_ops st_proc_ops = {
++	.proc_open	= st_open,
++	.proc_read	= seq_read,
++	.proc_write	= st_write,
++	.proc_lseek	= seq_lseek,
++	.proc_release	= single_release,
++};
++
++static int __init sched_tier_init(void)
++{
++	proc_create("sched_tier", 0644, NULL, &st_proc_ops);
++	pr_info("sched_tier: initialised (gold nice=%d, bronze nice=%d)\n",
++		tier_nice[GOLD], tier_nice[BRONZE]);
++	return 0;
++}
++late_initcall(sched_tier_init);
