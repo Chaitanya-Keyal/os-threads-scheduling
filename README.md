@@ -94,8 +94,8 @@ cd q3_sudoku && ./sudoku_analyzer grid_invalid.txt
 See `q4_fork_guard/README.md` for the full build and test walkthrough. In
 short: apply `q4_fork_guard/fork_guard.patch` to Linux 6.14. It adds
 `kernel/fork_guard.c`, `kernel/sched_tier.c` and
-`include/linux/fork_guard.h`, and hooks `kernel_clone()` and
-`commit_creds()`. Then build and boot the `6.14.0-forkguard` kernel and
+`include/linux/fork_guard.h`, and hooks `kernel_clone()`, `sched_fork()`
+and `commit_creds()`. Then build and boot the `6.14.0-forkguard` kernel and
 install `tier`:
 
 ```bash

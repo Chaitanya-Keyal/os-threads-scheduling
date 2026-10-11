@@ -56,7 +56,8 @@ the group) if the rate stays high. A user is forgiven after a cooldown.
 Everything is a sysctl and is logged to dmesg. Tiers: root writes
 `/proc/sched_tier` (through `tier`), and the kernel re-nices every task of
 that user (GOLD -7, SILVER 0, BRONZE +5), which changes their CFS weight
-immediately. `commit_creds()` applies the tier when a task switches user.
+immediately. `sched_fork()` gives new tasks the tier, and `commit_creds()`
+applies it when a task switches user.
 Containment never looks at tiers.
 
 ## Why each shared array is safe (asked in the viva)
@@ -168,9 +169,27 @@ programs.
 * **How is a running process re-tiered without a restart?** `set_user_nice()`
   changes the task's priority and reweights it in the run queue immediately.
   `st_apply()` calls it on every thread of the user.
-* **How do children inherit the tier?** `fork()` copies `static_prio` (the
-  nice value). A process that switches to the user (`sudo -u alice`) gets the
-  tier in `commit_creds()`.
+* **How do children inherit the tier?** `sched_fork()` calls
+  `st_fork_nice()`, so a new task of a tiered user starts at the tier's nice
+  value and load weight, even if its parent was reniced. A process that
+  switches to the user (`sudo -u alice`) gets the tier in `commit_creds()`.
+* **`sched_fork()` only runs when a task is created. How do you affect
+  running tasks?** `tier set` walks every thread of the user and calls
+  `set_user_nice()`, which reweights each one in its run queue at once.
+* **Why kill the process group and not one process?** A fork bomb is
+  hundreds of processes that keep replacing each other. Killing one does
+  nothing, but they all share one process group, so one `kill_pgrp()`
+  reaches every copy, including those being forked at that moment.
+* **In what order do you signal a stopped group?** Just SIGKILL. It is the
+  one signal that wakes stopped tasks, so they die without resuming. SIGCONT
+  first would let them fork again before dying. SIGCONT is only used to thaw
+  a group that is forgiven.
+* **Why 6.14 and not 6.8 like the help document?** The assignment asks for
+  any 6.x kernel, and 6.14 is the tree from assignment 1. The only API
+  difference is the sysctl table (const, and no empty sentinel in 6.14).
+* **Why `spin_lock()` and not `spin_lock_irqsave()`?** The locks are never
+  taken from interrupt context, only from the fork path, `/proc` and a
+  workqueue item, so interrupts never need to be disabled.
 * **Justify the clamp.** Nice -7..+5 means weights 4904..335. GOLD vs BRONZE
   is about 15:1, so BRONZE still gets about 6% of the core. Full -20..+19
   would be about 5900:1, which is effectively starvation.

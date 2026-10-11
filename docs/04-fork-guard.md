@@ -16,7 +16,7 @@ Modify Linux 6.x so that:
 3. **Both are observable** through `/proc`, and a tier never weakens
    containment.
 
-Source: `q4_fork_guard/linux/` (about 590 lines), `fork_guard.patch`, and the
+Source: `q4_fork_guard/linux/` (about 610 lines), `fork_guard.patch`, and the
 `tier` and `forkburst` tools.
 
 ## Where the kernel is hooked
@@ -24,7 +24,15 @@ Source: `q4_fork_guard/linux/` (about 590 lines), `fork_guard.patch`, and the
 | Hook | File / function | Why there |
 |------|-----------------|-----------|
 | `fg_check_fork(args)` | `kernel/fork.c`, top of `kernel_clone()` | fork, vfork, clone and clone3 all pass through `kernel_clone()`, so this sees every process creation once, before any work is done. Returning `-EAGAIN` makes `fork()` fail exactly as `ulimit -u` would. |
+| `st_fork_nice(p, &nice)` | `kernel/sched/core.c`, `sched_fork()` | every new task passes through here before it first runs, so a tiered user's child starts at the tier's nice value and load weight |
 | `st_cred_changed(task, old, new)` | `kernel/cred.c`, end of `commit_creds()` | every uid change (sudo, su, login, setuid) installs new credentials here, so a task that becomes alice gets alice's tier |
+
+The first two are the hook points named in the Q4 help document.
+`sched_fork()` is called from `copy_process()`, which runs after the
+`kernel_clone()` check, so containment always runs first and never depends on
+the tier code. The `commit_creds()` hook is our addition. `sched_fork()` only
+sees the uid the task has at fork time, and `sudo -u alice yes` is forked as
+root and becomes alice afterwards.
 
 Everything else lives in two new files, `kernel/fork_guard.c` and
 `kernel/sched_tier.c`, which are always built in (`obj-y`).
@@ -82,6 +90,12 @@ group, which it leads. If alice's shell happened to start a command during
 the storm, freezing *its* group would stop the shell. Only non-leaders can
 trigger the freeze, and a bomb has hundreds of them. The shell is safe, and
 the bomb is still caught at the next attempt by one of its members.
+
+**Why SIGKILL alone is enough for a stopped group.** SIGKILL is the one
+signal that wakes a stopped task, so the group dies without a SIGCONT first.
+Sending SIGCONT first would be wrong: the processes would resume and fork
+again for a moment before the kill arrives. SIGCONT is only used when a
+frozen group is forgiven instead of reaped.
 
 **Why the signals are sent outside the spinlock.** `kill_pgrp()` walks the
 group's task list and takes other locks, and `msleep_interruptible()` sleeps.
@@ -148,10 +162,11 @@ is meaningful.
 * **Re-tiering running work.** `st_apply()` walks every thread
   (`for_each_process_thread` under `rcu_read_lock`) and calls
   `set_user_nice()` on those whose real uid matches.
-* **Inheritance.** `fork()` copies the parent's `static_prio`, so a GOLD
-  user's children are born GOLD. Tasks that *switch* user, such as
-  `sudo -u alice yes`, start as root and become alice in `commit_creds()`,
-  where `st_cred_changed()` applies alice's tier. A switch between two SILVER
+* **Inheritance.** In `sched_fork()` a child of a tiered user is given the
+  tier's nice value and load weight before it first runs, even if its parent
+  had been reniced. Real-time children keep their RT priority. Tasks that
+  *switch* user, such as `sudo -u alice yes`, start as root and become alice
+  in `commit_creds()`, where `st_cred_changed()` applies alice's tier. A switch between two SILVER
   users keeps the inherited nice value, so `nice -n 10 sudo -u bob job` still
   works.
 * Root cannot be tiered, so system daemons are never re-niced.
@@ -178,8 +193,9 @@ two separate ssh logins, a GOLD `yes` at nice -7 still got only about 50%
 * `tier show` prints both files. If nobody is tiered it prints
   `(no user is tiered; everyone is SILVER)`.
 * dmesg: `fork_guard: initialised (...)` and `sched_tier: initialised (...)`
-  at boot, then every THROTTLE, FREEZE, REAP and FORGIVE and every tier
-  change.
+  at boot, then every THROTTLE (`pr_warn`), FREEZE and REAP (`pr_alert`),
+  every FORGIVE and every tier change (`pr_info`). `dmesg` colours the
+  warning and alert levels, as in the screenshots of the problem statement.
 
 ## Tiers never weaken containment
 
@@ -190,6 +206,13 @@ user's bomb taking exactly the same path as an untiered one.
 
 Lock order is always `fg_lock` then `st_lock` (only in the `/proc` show).
 `sched_tier.c` never takes `fg_lock`, so the two locks cannot deadlock.
+
+## Spinlocks without irqsave
+
+The help document suggests `spin_lock_irqsave()`. Both locks are only taken
+in process context: the fork path, `/proc` reads and writes, and the
+workqueue item. They are never taken from an interrupt handler, so plain
+`spin_lock()` is enough and disabling interrupts would add nothing.
 
 ## Limits and known simplifications
 

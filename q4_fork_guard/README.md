@@ -18,20 +18,30 @@ all fork_guard thresholds are sysctls.
 | `fork_guard.patch` | everything below as one patch against `v6.14` |
 | `linux/kernel/fork_guard.c` | fork-rate ladder, sysctls, `/proc/fork_guard` |
 | `linux/kernel/sched_tier.c` | tier table, re-nicing, `/proc/sched_tier` |
-| `linux/include/linux/fork_guard.h` | the hooks called from `fork.c` and `cred.c` |
+| `linux/include/linux/fork_guard.h` | the hooks called from `fork.c`, `sched/core.c` and `cred.c` |
 | `tier.c` | `tier set <user> <gold\|silver\|bronze>`, `tier reset`, `tier show` |
 | `forkburst.c` | a bursty but legitimate workload: throttled, never frozen |
 | `evidence/` | output captured on the VM: `01-04_tiers.txt`, `05-07_containment.txt`, `08_observability.txt`, `forkburst.txt` |
 
-The patch also edits three existing files:
+The patch also edits four existing files. The first three are the hook
+points from the Q4 help document; `commit_creds()` is an extra hook of ours:
 
 1. `kernel/fork.c`: `kernel_clone()` calls `fg_check_fork(args)` right after
    its argument checks and returns `-EAGAIN` if containment refuses the fork.
-   Every fork, vfork, clone and clone3 passes through here.
-2. `kernel/cred.c`: `commit_creds()` calls `st_cred_changed()` when the real
-   uid changes, so `sudo -u alice cmd`, `su` and logins get the new user's
-   tier.
+   Every fork, vfork, clone and clone3 passes through here, before
+   `copy_process()`, so containment always runs before any tier logic.
+2. `kernel/sched/core.c`: `sched_fork()` asks `st_fork_nice()` for the user's
+   tier and, for normal (non-RT) tasks, starts the new task at the tier's nice
+   value with the matching load weight.
 3. `kernel/Makefile`: adds `fork_guard.o sched_tier.o` to `obj-y`.
+4. `kernel/cred.c`: `commit_creds()` calls `st_cred_changed()` when the real
+   uid changes, so `sudo -u alice cmd`, `su` and logins get the new user's
+   tier. `sched_fork()` alone would miss these, because the task is still root
+   when it is forked and only becomes alice later.
+
+The help document targets Linux 6.8; the assignment allows any 6.x kernel,
+and we use 6.14, the same version as assignment 1. The 6.14 sysctl API takes
+a `const struct ctl_table` and needs no empty sentinel entry.
 
 ## Interfaces
 

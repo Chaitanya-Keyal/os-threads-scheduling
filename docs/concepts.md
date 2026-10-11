@@ -174,5 +174,7 @@ uses it so that `sudo -u alice prog` gets alice's tier.
 
 ## Kernel logging
 
-`pr_info()` writes a line to the kernel ring buffer, which `dmesg` prints
-(`dmesg -w` follows it live). Problem 4 logs every stage change there.
+`pr_info()`, `pr_warn()` and `pr_alert()` write a line to the kernel ring
+buffer at different log levels, and `dmesg` prints them (`dmesg -w` follows
+it live, and colours warnings and alerts). Problem 4 logs every stage change
+there.
