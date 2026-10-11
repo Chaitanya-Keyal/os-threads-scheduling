@@ -1,0 +1,77 @@
+Test cases 5-7, captured on the VM (kernel 6.14.0-forkguard).
+alice ran the bomb in her own interactive ssh terminal; root watched dmesg.
+
+== Test 5: containment, untiered (defaults 200 forks / 1000 ms)
+
+# alice terminal (27 "bash: fork: retry: Resource temporarily unavailable" lines omitted)
+alice@osvm:~$ :(){ :|:& };:
+
+[1] 1536
+alice@osvm:~$ sleep 12; echo "SHELL STILL ALIVE"; ps -u alice -o pid,pgid,stat,comm | head -5; exit
+
+[1]+  Done                    : | :
+SHELL STILL ALIVE
+    PID    PGID STAT COMMAND
+   1463    1463 Ss   systemd
+   1464    1463 S    (sd-pam)
+   1521    1459 S    sshd
+   1522    1522 Ss   bash
+logout
+
+# root: dmesg | grep fork_guard
+[  113.291272] fork_guard: THROTTLE uid=1001 pgid=1535 (>200 forks in 1000 ms)
+[  113.493024] fork_guard: FREEZE   uid=1001 pgid=1535 (SIGSTOP process group)
+[  113.748793] fork_guard: REAP     uid=1001 pgid=1535 (SIGKILL process group)
+
+== Test 6: containment, alice is GOLD
+
+# root: tier set alice gold
+user alice (uid 1001) -> gold
+# alice terminal (113 "bash: fork: retry: Resource temporarily unavailable" lines omitted)
+alice@osvm:~$ :(){ :|:& };:
+
+[1] 1944
+alice@osvm:~$ sleep 12; echo "SHELL STILL ALIVE"; ps -u alice -o pid,pgid,stat,comm | head -5; exit
+
+[1]+  Done                    : | :
+SHELL STILL ALIVE
+    PID    PGID STAT COMMAND
+   1872    1872 S<s  systemd
+   1873    1872 S<   (sd-pam)
+   1929    1868 S<   sshd
+   1930    1930 S<s  bash
+logout
+
+# root: dmesg | grep fork_guard
+[  157.252930] fork_guard: THROTTLE uid=1001 pgid=1943 (>200 forks in 1000 ms)
+[  158.875652] fork_guard: FREEZE   uid=1001 pgid=1943 (SIGSTOP process group)
+[  159.093634] fork_guard: REAP     uid=1001 pgid=1943 (SIGKILL process group)
+
+== Test 7: retuned at runtime, no rebuild
+
+# root: sysctl -w kernel.fg_threshold=50 kernel.fg_window_ms=500
+kernel.fg_threshold = 50
+kernel.fg_window_ms = 500
+# alice terminal (21 "bash: fork: retry: Resource temporarily unavailable" lines omitted)
+alice@osvm:~$ :(){ :|:& };:
+
+[1] 2557
+alice@osvm:~$ sleep 12; echo "SHELL STILL ALIVE"; ps -u alice -o pid,pgid,stat,comm | head -5; exit
+
+[1]+  Done                    : | :
+SHELL STILL ALIVE
+    PID    PGID STAT COMMAND
+   2485    2485 Ss   systemd
+   2486    2485 S    (sd-pam)
+   2542    2481 S    sshd
+   2543    2543 Ss   bash
+logout
+
+# root: dmesg | grep fork_guard
+[  184.943231] fork_guard: THROTTLE uid=1001 pgid=2556 (>50 forks in 500 ms)
+[  186.021935] fork_guard: FREEZE   uid=1001 pgid=2556 (SIGSTOP process group)
+[  186.229765] fork_guard: REAP     uid=1001 pgid=2556 (SIGKILL process group)
+
+# root: sysctl -w kernel.fg_threshold=200 kernel.fg_window_ms=1000   (defaults restored)
+# root: sysctl -w kernel.fg_threshold=0
+sysctl: setting key "kernel.fg_threshold": Invalid argument   (bounds enforced)

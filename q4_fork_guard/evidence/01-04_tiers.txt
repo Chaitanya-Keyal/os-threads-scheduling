@@ -1,0 +1,74 @@
+Test cases 1-4, captured on the VM (kernel 6.14.0-forkguard), all commands in one root shell.
+CPU shares are top's %CPU over a 3 s interval; both yes processes are pinned to CPU 0.
+
+# tier show
+(no user is tiered; everyone is SILVER)
+
+enabled=1 threshold=200 window_ms=1000 throttle_ms=40 cooldown_s=10 escalate_ms=200
+
+UID     TIER    FORKS   STAGE   THROTTLE  FREEZE  REAP
+1000    SILVER  5       0       0         0       0
+
+# sudo -u alice taskset -c 0 yes > /dev/null &
+# sudo -u bob   taskset -c 0 yes > /dev/null &
+# cgroups: alice 0::/user.slice/user-1000.slice/session-7.scope, bob 0::/user.slice/user-1000.slice/session-7.scope
+
+## Test 1: baseline
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+   1339 alice     20   0    6116   1660   1660 R  55.1   0.0   0:05.37 yes
+   1340 bob       20   0    6116   1656   1656 R  54.5   0.0   0:05.36 yes
+
+## Test 2: promote
+# tier set alice gold
+user alice (uid 1001) -> gold
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+   1339 alice     13  -7    6116   1660   1660 R  82.4   0.0   0:08.15 yes
+   1340 bob       20   0    6116   1656   1656 R  17.3   0.0   0:05.96 yes
+# ps -u alice -o pid,ni,pcpu,etime,comm
+    PID  NI %CPU     ELAPSED COMMAND
+   1339  -7 57.1       00:14 yes
+
+## Test 3: demote
+# tier set bob bronze
+user bob (uid 1002) -> bronze
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+   1339 alice     13  -7    6116   1660   1660 R  93.0   0.0   0:11.31 yes
+   1340 bob       25   5    6116   1656   1656 R   6.0   0.0   0:06.18 yes
+    PID USER      NI     TIME COMMAND
+   1339 alice     -7 00:00:11 yes
+   1340 bob        5 00:00:06 yes
+    PID USER      NI     TIME COMMAND
+   1339 alice     -7 00:00:15 yes
+   1340 bob        5 00:00:06 yes
+# tier show
+UID     TIER    NICE
+1001    GOLD    -7
+1002    BRONZE  5
+
+enabled=1 threshold=200 window_ms=1000 throttle_ms=40 cooldown_s=10 escalate_ms=200
+
+UID     TIER    FORKS   STAGE   THROTTLE  FREEZE  REAP
+1000    SILVER  0       0       0         0       0
+
+## Test 4: reset
+# tier reset
+all users reset to SILVER
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+   1340 bob       20   0    6116   1656   1656 R  51.2   0.0   0:08.49 yes
+   1339 alice     20   0    6116   1660   1660 R  47.8   0.0   0:17.36 yes
+
+# dmesg | grep sched_tier
+[    8.232472] sched_tier: initialised (gold nice=-7, bronze nice=5)
+[   77.181748] sched_tier: uid=1001 -> GOLD (nice -7)
+[   80.639038] sched_tier: uid=1002 -> BRONZE (nice 5)
+[   89.075635] sched_tier: all users reset to SILVER
+
+## Why the workloads must share a scheduling group
+# Same test with alice and bob each logged in over ssh (separate sessions):
+# tier set alice gold
+user alice (uid 1001) -> gold
+   3864 alice     13  -7    6116   1656   1656 R  49.5   0.0   0:04.51 yes
+# cgroups: alice 0::/user.slice/user-1001.slice/session-42.scope
+#          bob   0::/user.slice/user-1002.slice/session-41.scope
+NI is -7 but the share stays ~50%: the cpu controller gives each user slice an
+equal weight, and nice values only compete inside one group.
