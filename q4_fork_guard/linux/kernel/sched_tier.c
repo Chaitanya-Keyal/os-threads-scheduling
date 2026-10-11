@@ -13,6 +13,10 @@
  * BRONZE still makes progress next to GOLD: 335 / (4904 + 335) = ~6% of a
  * shared core, where nice 19 against nice -20 would be 15 / 88776 = 0.02%.
  *
+ * New tasks get their user's tier in sched_fork(), tasks that switch user
+ * (sudo, su, login) in commit_creds(), and running tasks are re-niced when
+ * the tier changes.
+ *
  * Root writes commands to /proc/sched_tier:
  *   set <uid> gold|silver|bronze
  *   reset
@@ -91,6 +95,21 @@ static void st_apply(kuid_t uid, enum tier t)
 		if (uid_eq(task_uid(p), uid))
 			set_user_nice(p, tier_nice[t]);
 	rcu_read_unlock();
+}
+
+/*
+ * Called from sched_fork(): a new task of a tiered user starts with the
+ * tier's nice value, whatever nice value its parent had.
+ */
+bool st_fork_nice(struct task_struct *p, int *nice)
+{
+	enum tier t;
+
+	rcu_read_lock();
+	t = st_tier(task_uid(p));
+	rcu_read_unlock();
+	*nice = tier_nice[t];
+	return t != SILVER;
 }
 
 /*

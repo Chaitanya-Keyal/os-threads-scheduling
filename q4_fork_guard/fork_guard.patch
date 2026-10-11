@@ -1,7 +1,7 @@
 diff -ruN a/include/linux/fork_guard.h b/include/linux/fork_guard.h
 --- a/include/linux/fork_guard.h	1970-01-01 00:00:00.000000000 +0000
-+++ b/include/linux/fork_guard.h	2026-10-11 10:30:06.001967244 +0000
-@@ -0,0 +1,24 @@
++++ b/include/linux/fork_guard.h	2026-10-11 16:12:11.443288534 +0000
+@@ -0,0 +1,27 @@
 +/* SPDX-License-Identifier: GPL-2.0 */
 +/*
 + * Fork storm containment (kernel/fork_guard.c) and tiered CPU scheduling
@@ -19,6 +19,9 @@ diff -ruN a/include/linux/fork_guard.h b/include/linux/fork_guard.h
 +/* Called from kernel_clone(): 0 to allow the fork, -EAGAIN to refuse it. */
 +int fg_check_fork(struct kernel_clone_args *args);
 +
++/* Called from sched_fork(): true and the nice value if p's user is tiered. */
++bool st_fork_nice(struct task_struct *p, int *nice);
++
 +/* Called from commit_creds() when a task's real uid changes. */
 +void st_cred_changed(struct task_struct *task, kuid_t old_uid, kuid_t new_uid);
 +
@@ -27,8 +30,8 @@ diff -ruN a/include/linux/fork_guard.h b/include/linux/fork_guard.h
 +
 +#endif /* _LINUX_FORK_GUARD_H */
 diff -ruN a/kernel/Makefile b/kernel/Makefile
---- a/kernel/Makefile	2026-10-11 10:18:23.806089633 +0000
-+++ b/kernel/Makefile	2026-10-11 10:30:05.988311711 +0000
+--- a/kernel/Makefile	2026-10-11 16:12:11.328091339 +0000
++++ b/kernel/Makefile	2026-10-11 16:12:11.431416636 +0000
 @@ -10,7 +10,8 @@
  	    extable.o params.o \
  	    kthread.o sys_ni.o nsproxy.o \
@@ -40,8 +43,8 @@ diff -ruN a/kernel/Makefile b/kernel/Makefile
  obj-$(CONFIG_USERMODE_DRIVER) += usermode_driver.o
  obj-$(CONFIG_MULTIUSER) += groups.o
 diff -ruN a/kernel/cred.c b/kernel/cred.c
---- a/kernel/cred.c	2026-10-11 10:18:23.806063618 +0000
-+++ b/kernel/cred.c	2026-10-11 10:30:05.988225222 +0000
+--- a/kernel/cred.c	2026-10-11 16:12:11.328697197 +0000
++++ b/kernel/cred.c	2026-10-11 16:12:11.431206934 +0000
 @@ -9,6 +9,7 @@
  
  #include <linux/export.h>
@@ -62,8 +65,8 @@ diff -ruN a/kernel/cred.c b/kernel/cred.c
  	put_cred_many(old, 2);
  	return 0;
 diff -ruN a/kernel/fork.c b/kernel/fork.c
---- a/kernel/fork.c	2026-10-11 10:18:23.805969871 +0000
-+++ b/kernel/fork.c	2026-10-11 10:30:05.986099644 +0000
+--- a/kernel/fork.c	2026-10-11 16:12:11.330291058 +0000
++++ b/kernel/fork.c	2026-10-11 16:12:11.430981626 +0000
 @@ -72,6 +72,7 @@
  #include <linux/ksm.h>
  #include <linux/acct.h>
@@ -86,7 +89,7 @@ diff -ruN a/kernel/fork.c b/kernel/fork.c
  	 * called from kernel_thread or CLONE_UNTRACED is explicitly
 diff -ruN a/kernel/fork_guard.c b/kernel/fork_guard.c
 --- a/kernel/fork_guard.c	1970-01-01 00:00:00.000000000 +0000
-+++ b/kernel/fork_guard.c	2026-10-11 10:30:05.988368597 +0000
++++ b/kernel/fork_guard.c	2026-10-11 16:12:11.432102753 +0000
 @@ -0,0 +1,327 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
@@ -249,7 +252,7 @@ diff -ruN a/kernel/fork_guard.c b/kernel/fork_guard.c
 +		u->stage = 1;
 +		u->stage_since = now;
 +		u->throttles++;
-+		pr_info("fork_guard: THROTTLE uid=%u pgid=%d (>%d forks in %d ms)\n",
++		pr_warn("fork_guard: THROTTLE uid=%u pgid=%d (>%d forks in %d ms)\n",
 +			uid_nr(u), pid_nr(pgrp), fg_threshold, fg_window_ms);
 +	} else if (u->stage == 1 && now - u->stage_since >= fg_escalate_ms &&
 +		   !leader) {
@@ -264,8 +267,8 @@ diff -ruN a/kernel/fork_guard.c b/kernel/fork_guard.c
 +		stop = pgrp;
 +		schedule_delayed_work(&u->reap_work,
 +				      msecs_to_jiffies(fg_escalate_ms));
-+		pr_info("fork_guard: FREEZE   uid=%u pgid=%d (SIGSTOP process group)\n",
-+			uid_nr(u), pid_nr(pgrp));
++		pr_alert("fork_guard: FREEZE   uid=%u pgid=%d (SIGSTOP process group)\n",
++			 uid_nr(u), pid_nr(pgrp));
 +	}
 +	spin_unlock(&fg_lock);
 +
@@ -291,8 +294,8 @@ diff -ruN a/kernel/fork_guard.c b/kernel/fork_guard.c
 +	if (fg_count(u, now, false) > fg_threshold) {
 +		sig = SIGKILL;
 +		u->reaps++;
-+		pr_info("fork_guard: REAP     uid=%u pgid=%d (SIGKILL process group)\n",
-+			uid_nr(u), pid_nr(u->frozen));
++		pr_alert("fork_guard: REAP     uid=%u pgid=%d (SIGKILL process group)\n",
++			 uid_nr(u), pid_nr(u->frozen));
 +		/* the offender is gone; start the user again from a clean slate */
 +		u->slot_width = 0;
 +		u->stage = 0;
@@ -415,10 +418,40 @@ diff -ruN a/kernel/fork_guard.c b/kernel/fork_guard.c
 +	return 0;
 +}
 +late_initcall(fork_guard_init);
+diff -ruN a/kernel/sched/core.c b/kernel/sched/core.c
+--- a/kernel/sched/core.c	2026-10-11 16:12:11.320491370 +0000
++++ b/kernel/sched/core.c	2026-10-11 16:12:22.561237301 +0000
+@@ -32,6 +32,7 @@
+ #include <linux/sched/hotplug.h>
+ #include <linux/sched/init.h>
+ #include <linux/sched/isolation.h>
++#include <linux/fork_guard.h>
+ #include <linux/sched/loadavg.h>
+ #include <linux/sched/mm.h>
+ #include <linux/sched/nohz.h>
+@@ -4753,6 +4754,18 @@
+ 		p->sched_reset_on_fork = 0;
+ 	}
+ 
++	/* sched_tier: a new task of a tiered user starts at the tier's nice */
++	if (!task_has_dl_policy(p) && !task_has_rt_policy(p)) {
++		int nice;
++
++		if (st_fork_nice(p, &nice)) {
++			p->static_prio = NICE_TO_PRIO(nice);
++			p->normal_prio = p->static_prio;
++			p->prio = p->static_prio;
++			set_load_weight(p, false);
++		}
++	}
++
+ 	if (dl_prio(p->prio))
+ 		return -EAGAIN;
+ 
 diff -ruN a/kernel/sched_tier.c b/kernel/sched_tier.c
 --- a/kernel/sched_tier.c	1970-01-01 00:00:00.000000000 +0000
-+++ b/kernel/sched_tier.c	2026-10-11 10:30:05.988421741 +0000
-@@ -0,0 +1,236 @@
++++ b/kernel/sched_tier.c	2026-10-11 16:12:11.432288779 +0000
+@@ -0,0 +1,255 @@
 +// SPDX-License-Identifier: GPL-2.0
 +/*
 + * sched_tier: GOLD / SILVER / BRONZE CPU service tiers, per user.
@@ -433,6 +466,10 @@ diff -ruN a/kernel/sched_tier.c b/kernel/sched_tier.c
 + * The bias is clamped to nice -7..+5 instead of the full -20..+19 so that
 + * BRONZE still makes progress next to GOLD: 335 / (4904 + 335) = ~6% of a
 + * shared core, where nice 19 against nice -20 would be 15 / 88776 = 0.02%.
++ *
++ * New tasks get their user's tier in sched_fork(), tasks that switch user
++ * (sudo, su, login) in commit_creds(), and running tasks are re-niced when
++ * the tier changes.
 + *
 + * Root writes commands to /proc/sched_tier:
 + *   set <uid> gold|silver|bronze
@@ -512,6 +549,21 @@ diff -ruN a/kernel/sched_tier.c b/kernel/sched_tier.c
 +		if (uid_eq(task_uid(p), uid))
 +			set_user_nice(p, tier_nice[t]);
 +	rcu_read_unlock();
++}
++
++/*
++ * Called from sched_fork(): a new task of a tiered user starts with the
++ * tier's nice value, whatever nice value its parent had.
++ */
++bool st_fork_nice(struct task_struct *p, int *nice)
++{
++	enum tier t;
++
++	rcu_read_lock();
++	t = st_tier(task_uid(p));
++	rcu_read_unlock();
++	*nice = tier_nice[t];
++	return t != SILVER;
 +}
 +
 +/*

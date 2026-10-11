@@ -1,11 +1,11 @@
 Graduated containment: forkburst (300 forks as fast as possible, backs off 1.1 s on EAGAIN) run by alice.
 
 # alice: forkburst
-fork 200 refused (EAGAIN), backing off 1100 ms
+fork 193 refused (EAGAIN), backing off 1100 ms
 created 300 children, 1 forks refused
 
 # root: dmesg | grep fork_guard
-[  267.776720] fork_guard: THROTTLE uid=1001 pgid=3105 (>200 forks in 1000 ms)
-[  280.070983] fork_guard: FORGIVE uid=1001 (quiet for 10 s, back to stage 0)
+[  177.894904] fork_guard: THROTTLE uid=1001 pgid=2955 (>200 forks in 1000 ms)
+[  189.427547] fork_guard: FORGIVE uid=1001 (quiet for 10 s, back to stage 0)
 
 (THROTTLE only - no FREEZE or REAP; forgiven after the 10 s cooldown.)

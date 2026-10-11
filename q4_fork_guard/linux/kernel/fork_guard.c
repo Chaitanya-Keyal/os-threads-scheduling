@@ -159,7 +159,7 @@ int fg_check_fork(struct kernel_clone_args *args)
 		u->stage = 1;
 		u->stage_since = now;
 		u->throttles++;
-		pr_info("fork_guard: THROTTLE uid=%u pgid=%d (>%d forks in %d ms)\n",
+		pr_warn("fork_guard: THROTTLE uid=%u pgid=%d (>%d forks in %d ms)\n",
 			uid_nr(u), pid_nr(pgrp), fg_threshold, fg_window_ms);
 	} else if (u->stage == 1 && now - u->stage_since >= fg_escalate_ms &&
 		   !leader) {
@@ -174,8 +174,8 @@ int fg_check_fork(struct kernel_clone_args *args)
 		stop = pgrp;
 		schedule_delayed_work(&u->reap_work,
 				      msecs_to_jiffies(fg_escalate_ms));
-		pr_info("fork_guard: FREEZE   uid=%u pgid=%d (SIGSTOP process group)\n",
-			uid_nr(u), pid_nr(pgrp));
+		pr_alert("fork_guard: FREEZE   uid=%u pgid=%d (SIGSTOP process group)\n",
+			 uid_nr(u), pid_nr(pgrp));
 	}
 	spin_unlock(&fg_lock);
 
@@ -201,8 +201,8 @@ static void fg_reap_work(struct work_struct *work)
 	if (fg_count(u, now, false) > fg_threshold) {
 		sig = SIGKILL;
 		u->reaps++;
-		pr_info("fork_guard: REAP     uid=%u pgid=%d (SIGKILL process group)\n",
-			uid_nr(u), pid_nr(u->frozen));
+		pr_alert("fork_guard: REAP     uid=%u pgid=%d (SIGKILL process group)\n",
+			 uid_nr(u), pid_nr(u->frozen));
 		/* the offender is gone; start the user again from a clean slate */
 		u->slot_width = 0;
 		u->stage = 0;
