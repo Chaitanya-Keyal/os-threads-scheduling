@@ -1,0 +1,190 @@
+CS F372 Assignment 2 - Problem 2 results
+Kernel 6.14.0-setnice, HZ=1000, 4 CPUs, all processes pinned to CPU 0, RT priority 50
+Each configuration was run 3 times; the run with the median total elapsed time is shown.
+
+Program-A (CPU-Bound)
+-------------------------------------------------
+Time Quantum: 1ms
+  Involuntary Context Switches: 6949
+  Voluntary Context Switches:   8
+  Average Response Time:        29.52ms
+  Maximum Response Time:        49.83ms
+  Average Turnaround Time:      8572.48ms
+  Maximum Turnaround Time:      8692.40ms
+  Throughput:                   0.92 children/s
+  Total Elapsed Time:           8.69s
+
+Time Quantum: 10ms
+  Involuntary Context Switches: 723
+  Voluntary Context Switches:   8
+  Average Response Time:        43.66ms
+  Maximum Response Time:        81.56ms
+  Average Turnaround Time:      8267.23ms
+  Maximum Turnaround Time:      8335.86ms
+  Throughput:                   0.96 children/s
+  Total Elapsed Time:           8.34s
+
+Time Quantum: 50ms
+  Involuntary Context Switches: 158
+  Voluntary Context Switches:   8
+  Average Response Time:        189.64ms
+  Maximum Response Time:        382.51ms
+  Average Turnaround Time:      8186.76ms
+  Maximum Turnaround Time:      8440.60ms
+  Throughput:                   0.95 children/s
+  Total Elapsed Time:           8.44s
+
+Time Quantum: 150ms
+  Involuntary Context Switches: 61
+  Voluntary Context Switches:   8
+  Average Response Time:        606.84ms
+  Maximum Response Time:        1235.02ms
+  Average Turnaround Time:      8769.50ms
+  Maximum Turnaround Time:      9463.89ms
+  Throughput:                   0.84 children/s
+  Total Elapsed Time:           9.47s
+
+Time Quantum: 300ms
+  Involuntary Context Switches: 37
+  Voluntary Context Switches:   8
+  Average Response Time:        1188.91ms
+  Maximum Response Time:        2496.94ms
+  Average Turnaround Time:      7873.14ms
+  Maximum Turnaround Time:      8846.73ms
+  Throughput:                   0.90 children/s
+  Total Elapsed Time:           8.85s
+
+Time Quantum: 500ms
+  Involuntary Context Switches: 34
+  Voluntary Context Switches:   8
+  Average Response Time:        2570.38ms
+  Maximum Response Time:        5048.29ms
+  Average Turnaround Time:      8241.06ms
+  Maximum Turnaround Time:      10048.93ms
+  Throughput:                   0.80 children/s
+  Total Elapsed Time:           10.05s
+
+Scheduling Policy: SCHED_FIFO
+  Involuntary Context Switches: 30
+  Voluntary Context Switches:   8
+  Average Response Time:        4449.86ms
+  Maximum Response Time:        8692.03ms
+  Average Turnaround Time:      5705.45ms
+  Maximum Turnaround Time:      10048.16ms
+  Throughput:                   0.80 children/s
+  Total Elapsed Time:           10.05s
+
+Program-B (I/O-Bound)
+-------------------------------------------------
+Time Quantum: 1ms
+  Involuntary Context Switches: 1015
+  Voluntary Context Switches:   57245
+  Average Response Time:        2.73ms
+  Maximum Response Time:        4.35ms
+  Average Turnaround Time:      15041.29ms
+  Maximum Turnaround Time:      15079.58ms
+  Throughput:                   0.53 children/s
+  Total Elapsed Time:           15.08s
+
+Time Quantum: 10ms
+  Involuntary Context Switches: 120
+  Voluntary Context Switches:   56826
+  Average Response Time:        2.20ms
+  Maximum Response Time:        3.79ms
+  Average Turnaround Time:      14743.83ms
+  Maximum Turnaround Time:      14919.20ms
+  Throughput:                   0.54 children/s
+  Total Elapsed Time:           14.92s
+
+Time Quantum: 50ms
+  Involuntary Context Switches: 29
+  Voluntary Context Switches:   55265
+  Average Response Time:        2.14ms
+  Maximum Response Time:        3.61ms
+  Average Turnaround Time:      17155.28ms
+  Maximum Turnaround Time:      17237.95ms
+  Throughput:                   0.46 children/s
+  Total Elapsed Time:           17.24s
+
+Time Quantum: 150ms
+  Involuntary Context Switches: 18
+  Voluntary Context Switches:   55669
+  Average Response Time:        6.54ms
+  Maximum Response Time:        10.04ms
+  Average Turnaround Time:      18181.29ms
+  Maximum Turnaround Time:      18268.08ms
+  Throughput:                   0.44 children/s
+  Total Elapsed Time:           18.27s
+
+Time Quantum: 300ms
+  Involuntary Context Switches: 8
+  Voluntary Context Switches:   54827
+  Average Response Time:        2.04ms
+  Maximum Response Time:        3.58ms
+  Average Turnaround Time:      16277.71ms
+  Maximum Turnaround Time:      16435.37ms
+  Throughput:                   0.49 children/s
+  Total Elapsed Time:           16.44s
+
+Time Quantum: 500ms
+  Involuntary Context Switches: 16
+  Voluntary Context Switches:   55168
+  Average Response Time:        1.92ms
+  Maximum Response Time:        3.06ms
+  Average Turnaround Time:      17862.49ms
+  Maximum Turnaround Time:      17944.64ms
+  Throughput:                   0.45 children/s
+  Total Elapsed Time:           17.94s
+
+Scheduling Policy: SCHED_FIFO
+  Involuntary Context Switches: 11
+  Voluntary Context Switches:   55304
+  Average Response Time:        6.51ms
+  Maximum Response Time:        9.49ms
+  Average Turnaround Time:      18095.69ms
+  Maximum Turnaround Time:      18146.24ms
+  Throughput:                   0.44 children/s
+  Total Elapsed Time:           18.15s
+
+Observations
+-------------------------------------------------
+Program A (CPU-bound)
+- Involuntary context switches fall as the quantum grows (about 6950 at 1ms,
+  720 at 10ms, 160 at 50ms, about 35 at 300-500ms). Each child needs about
+  1 s of CPU, so the total is roughly (total CPU time / quantum). The 30-ish
+  left at large quanta and under FIFO come from RT throttling: real-time
+  tasks may use 950 ms of every second, and the remaining 50 ms preempts them.
+- Voluntary switches stay at 8: a CPU-bound child blocks only once, when it
+  writes its report and exits.
+- Response time grows with the quantum. The parent forks all 8 children
+  before it blocks, so child i first runs after i quanta of its siblings:
+  about 30-45ms at 1-10ms, 190ms at 50ms, 600ms at 150ms, 1.2s at 300ms and
+  2.6s at 500ms (maximum about 7 quanta).
+- Turnaround and throughput barely change (about 8.2-8.8 s, 0.8-0.96
+  children/s). The CPU does the same total work whatever the quantum, and
+  with a single core no child can finish before the CPU has done nearly all
+  of it, because round-robin interleaves all 8. Very small quanta pay a small
+  switching cost. Large quanta add a little run-to-run noise.
+- SCHED_FIFO runs the children one after another: the worst response time
+  (8.7 s, child 8 waits for 7 others) but the best average turnaround
+  (5.7 s against about 8.2 s), because early children finish early instead of
+  all finishing near the end. Total elapsed time and throughput are the same.
+
+Program B (I/O-bound)
+- About 55,000 voluntary switches in every run: each of the 16,000
+  write+fsync pairs blocks on the disk (several times per fsync). The
+  children give up the CPU long before any quantum expires.
+- Involuntary switches are low and only noticeable at 1ms (about 1000), where
+  a child is occasionally preempted between finishing one fsync and blocking
+  on the next.
+- Response time is a few ms for every quantum and under FIFO: the children
+  block almost immediately, so each new child gets the CPU at once.
+- Turnaround (15-18 s) and throughput (0.44-0.54 children/s) are set by the
+  disk, not by the scheduler, so neither the quantum nor FIFO vs RR changes
+  them meaningfully. The variation between runs is disk and host noise.
+
+Notes
+- The quantum is counted in scheduler ticks of CPU time used by the task.
+  With HZ=1000 every value is exact, but wall-clock quanta inside the VM are
+  somewhat longer than nominal because the host occasionally deschedules the
+  virtual CPU (steal time) and because of RT throttling.
