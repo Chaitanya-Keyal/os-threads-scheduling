@@ -103,8 +103,8 @@ no FREEZE. The program backs off and finishes all 300 forks. After 10 s,
 **Observability (test 8):** `cat /proc/fork_guard`, `cat /proc/sched_tier`,
 `tier show`, `sysctl -a | grep fg_`.
 
-Source on request: `~/linux-6.14-fg/kernel/fork_guard.c`, `sched_tier.c`,
-and `grep -n fg_check_fork ~/linux-6.14-fg/kernel/fork.c`.
+Source on request: `~/kbuild-a2/linux-6.14/kernel/fork_guard.c`, `sched_tier.c`,
+and `grep -n fg_check_fork ~/kbuild-a2/linux-6.14/kernel/fork.c`.
 
 ## If something goes wrong
 

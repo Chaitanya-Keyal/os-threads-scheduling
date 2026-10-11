@@ -81,7 +81,7 @@ make -j$(nproc)
 sudo make modules_install && sudo make install
 ```
 
-On our VM the tree is `~/linux-6.14-fg`. GRUB is set to boot
+On our VM the built tree is `~/kbuild-a2/linux-6.14`. GRUB is set to boot
 `6.14.0-forkguard` by default through `GRUB_DEFAULT` in `/etc/default/grub`.
 The assignment 1 kernel `6.14.0-setnice` is still under "Advanced options".
 

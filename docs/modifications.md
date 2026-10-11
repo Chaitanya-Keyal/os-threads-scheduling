@@ -42,3 +42,35 @@ of this page.
 | Score a blank cell differently | the `v == 0` branch in `score_block()` |
 | Print the per-unit verdict table | loop over `validity[]` after the joins in `main` |
 | Accept another blank character, e.g. `_` | the `ch != '.'` test and the `ch == '.'` mapping in `read_grid()` |
+
+## Problem 4: fork_guard.c, sched_tier.c, tier.c
+
+Most threshold changes need no code at all: `sudo sysctl -w kernel.fg_<name>=<value>`.
+
+| Change | Where |
+|--------|-------|
+| Different default threshold, window, delay, cooldown | the `static int fg_...` defaults at the top of `fork_guard.c` (or just `sysctl` at run time) |
+| Skip FREEZE and go straight to REAP | in `fg_check_fork()`, send `SIGKILL` instead of `SIGSTOP` in the stage 1 branch and do not schedule the work |
+| Kill only the forking process, not its group | `send_sig(SIGKILL, current, 1)` instead of `kill_pgrp(...)` |
+| Count thread creation too | remove `(args->flags & CLONE_THREAD) \|\|` from the first test in `fg_check_fork()` |
+| Exempt another user as well as root | add `\|\| uid_eq(uid, KUIDT_INIT(1000))` to the same test |
+| Log every refused fork | `pr_info_ratelimited(...)` just before `msleep_interruptible()` |
+| Different tier strengths | `tier_nice[]` in `sched_tier.c` (keep the clamp argument in mind) |
+| A fourth tier, e.g. PLATINUM | add it to `enum tier`, `tier_name[]`, `tier_nice[]` and to the name check in `tier.c` |
+| Allow two GOLD users | remove the `if (t == GOLD)` demotion loop in `st_set()` |
+| Another column in /proc/fork_guard | a field in `struct fg_user`, update it, print it in `fg_show()` |
+
+Rebuilding on the VM (the built tree is `~/kbuild-a2/linux-6.14`, so only the
+changed file is recompiled):
+
+```bash
+cd ~/kbuild-a2/linux-6.14
+nano kernel/fork_guard.c
+make -j4                    # recompiles the file and relinks the kernel
+sudo make install           # copies vmlinuz to /boot, updates initramfs and GRUB
+sudo reboot
+```
+
+A change to `tier.c` is user space: `make` in the repository root, then
+`sudo install q4_fork_guard/tier /usr/local/bin/`. Copy any changed kernel
+file back to `q4_fork_guard/linux/` so that the repository stays in sync.
