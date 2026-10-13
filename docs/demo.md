@@ -7,6 +7,12 @@ default. Log in from WSL with `ssh osvm`, or at the VM console. Then:
 cd ~/assignment-2 && make
 ```
 
+**Keep the laptop plugged in.** On battery, Windows delivers timer ticks to
+the VM several times more slowly and disk writes take about twice as long.
+Problem 2 then looks wrong: a 10 ms quantum behaves like roughly 85 ms (about
+90 involuntary switches instead of about 720), and `./io_bound` takes close
+to 30 s. `results.txt` was measured on mains power.
+
 ## Problem 1
 
 ```bash
