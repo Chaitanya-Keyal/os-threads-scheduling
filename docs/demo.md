@@ -33,7 +33,9 @@ sudo timeout 30 taskset -c 0 chrt -f 50 ./cpu_bound
 sudo sysctl -w kernel.sched_rr_timeslice_ms=100   # back to the default
 ```
 
-Each run takes about 10 s. Point out how involuntary switches and response
+Each run takes about 10 s. `./io_bound` takes 15-30 s depending on how busy
+the host disk is. If `timeout 30` cuts the FIFO run, the program still prints
+the context switches and `(stopped early: N of 8 children finished)`. Point out how involuntary switches and response
 time move with the quantum, and that FIFO has the worst response time but
 the best average turnaround. `sudo ./run_all.sh` redoes everything in about
 10 minutes, so only run it if asked.
@@ -112,5 +114,4 @@ and `grep -n fg_check_fork ~/kbuild-a2/linux-6.14/kernel/fork.c`.
   `ps -eo pid,pgid,stat,user,cmd | grep " T"` shows it. `kill -CONT -<pgid>`
   or `kill -KILL -<pgid>`.
 * The VM can still boot `6.14.0-setnice` or the stock Ubuntu kernel from GRUB
-  under "Advanced options for Ubuntu". The VirtualBox snapshot `pre-forkguard`
-  is the state just before this kernel was installed.
+  under "Advanced options for Ubuntu".

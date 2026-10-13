@@ -11,8 +11,8 @@
 
 ## Contents
 
-Longer explanations of each problem, the concepts behind them, a demo script
-and viva preparation notes are in `docs/` (start with `docs/viva-prep.md`).
+Longer explanations of each problem, the concepts behind them and a demo
+script are in `docs/`.
 
 | Directory         | Problem                                         | Program(s) |
 |-------------------|-------------------------------------------------|------------|
@@ -71,6 +71,8 @@ sudo timeout 30 taskset -c 0 chrt -f 50 ./io_bound
   500, runs both programs under SCHED_RR on CPU 0, runs them once under
   SCHED_FIFO, and restores the quantum. Each configuration runs 3 times and
   the median run is reported.
+* If `timeout 30` cuts a FIFO run short, the parent still prints the
+  statistics of the children that had finished.
 * `results.txt` holds the statistics and the observations.
 
 ## Problem 3 - `sudoku_analyzer`

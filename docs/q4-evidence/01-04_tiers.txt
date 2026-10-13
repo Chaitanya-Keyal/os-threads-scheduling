@@ -7,40 +7,40 @@ CPU shares are top's %CPU over a 3 s interval; both yes processes are pinned to 
 enabled=1 threshold=200 window_ms=1000 throttle_ms=40 cooldown_s=10 escalate_ms=200
 
 UID     TIER    FORKS   STAGE   THROTTLE  FREEZE  REAP
-1000    SILVER  3       0       0         0       0
+1000    SILVER  5       0       0         0       0
 
 # sudo -u alice taskset -c 0 yes > /dev/null &
 # sudo -u bob   taskset -c 0 yes > /dev/null &
-# cgroups: alice 0::/user.slice/user-1000.slice/session-6.scope, bob 0::/user.slice/user-1000.slice/session-6.scope
+# cgroups: alice 0::/user.slice/user-1000.slice/session-8.scope, bob 0::/user.slice/user-1000.slice/session-8.scope
 
 ## Test 1: baseline
     PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
-   1272 alice     20   0    6116   1660   1660 R  50.0   0.0   0:05.13 yes
-   1273 bob       20   0    6116   1660   1660 R  50.0   0.0   0:05.13 yes
+   1457 bob       20   0    6116   1656   1656 R  55.4   0.0   0:05.82 yes
+   1458 alice     20   0    6116   1648   1648 R  43.8   0.0   0:05.81 yes
 
 ## Test 2: promote
 # tier set alice gold
 user alice (uid 1001) -> gold
     PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
-   1272 alice     13  -7    6116   1660   1660 R  82.8   0.0   0:07.82 yes
-   1273 bob       20   0    6116   1660   1660 R  17.2   0.0   0:05.70 yes
+   1458 alice     13  -7    6116   1648   1648 R  81.0   0.0   0:08.83 yes
+   1457 bob       20   0    6116   1656   1656 R  18.1   0.0   0:06.50 yes
 # ps -u alice -o pid,ni,pcpu,etime,comm
     PID  NI %CPU     ELAPSED COMMAND
-   1272  -7 58.1       00:13 yes
+   1458  -7 57.0       00:15 yes
 
 ## Test 3: demote
 # tier set bob bronze
 user bob (uid 1002) -> bronze
     PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
-   1272 alice     13  -7    6116   1660   1660 R  93.7   0.0   0:11.06 yes
-   1273 bob       25   5    6116   1660   1660 R   6.3   0.0   0:05.95 yes
+   1458 alice     13  -7    6116   1648   1648 R  94.4   0.0   0:12.06 yes
+   1457 bob       25   5    6116   1656   1656 R   3.0   0.0   0:06.71 yes
 # ps -o pid,user,ni,time,comm (5 s apart)
     PID USER      NI     TIME COMMAND
-   1272 alice     -7 00:00:11 yes
-   1273 bob        5 00:00:05 yes
+   1457 bob        5 00:00:06 yes
+   1458 alice     -7 00:00:12 yes
     PID USER      NI     TIME COMMAND
-   1272 alice     -7 00:00:15 yes
-   1273 bob        5 00:00:06 yes
+   1457 bob        5 00:00:07 yes
+   1458 alice     -7 00:00:17 yes
 # tier show
 UID     TIER    NICE
 1001    GOLD    -7
@@ -50,26 +50,28 @@ enabled=1 threshold=200 window_ms=1000 throttle_ms=40 cooldown_s=10 escalate_ms=
 
 UID     TIER    FORKS   STAGE   THROTTLE  FREEZE  REAP
 1000    SILVER  0       0       0         0       0
+1001    GOLD    0       0       0         0       0
+1002    BRONZE  0       0       0         0       0
 
 ## Test 4: reset
 # tier reset
 all users reset to SILVER
     PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
-   1272 alice     20   0    6116   1660   1660 R  50.2   0.0   0:17.58 yes
-   1273 bob       20   0    6116   1660   1660 R  49.8   0.0   0:07.97 yes
+   1458 alice     20   0    6116   1648   1648 R  49.8   0.0   0:19.23 yes
+   1457 bob       20   0    6116   1656   1656 R  48.6   0.0   0:09.21 yes
 
 # dmesg | grep sched_tier
-[    4.512240] sched_tier: initialised (gold nice=-7, bronze nice=5)
-[   59.946002] sched_tier: uid=1001 -> GOLD (nice -7)
-[   63.466451] sched_tier: uid=1002 -> BRONZE (nice 5)
-[   71.846002] sched_tier: all users reset to SILVER
+[   14.560492] sched_tier: initialised (gold nice=-7, bronze nice=5)
+[  290.449790] sched_tier: uid=1001 -> GOLD (nice -7)
+[  294.257600] sched_tier: uid=1002 -> BRONZE (nice 5)
+[  303.105638] sched_tier: all users reset to SILVER
 
 ## Children inherit their user's tier (sched_fork hook)
 # root: tier set alice gold
 # alice: renice -n 10 -p $$; sleep 3 & ps -o pid,ni,comm -p $$,$!
     PID  NI COMMAND
-   1466  10 bash
-   1468  -7 sleep
+   2104  10 bash
+   2106  -7 sleep
 The parent shell was reniced to 10, but its new child starts at GOLD's -7.
 
 ## Why the workloads must share a scheduling group

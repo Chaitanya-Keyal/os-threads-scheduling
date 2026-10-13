@@ -45,6 +45,15 @@ time. The results go in `q2_rt_sched/results.txt`.
 The scheduling policy is not set in C. `chrt` sets it on the parent, and
 `fork()` copies the policy, priority and CPU affinity to every child.
 
+**When `timeout 30` fires.** `timeout` sends SIGTERM to the whole process
+group. The children die, as intended. The parent installs an empty SIGTERM
+handler *after* forking, so only the parent has it. The signal makes its
+blocked `read()` return, and it then reaps the children and prints the block
+for the children that had finished, ending with a line such as
+`(stopped early: 0 of 8 children finished)`. Without the handler a capped run
+would print nothing. On a slow-disk day the I/O-bound FIFO run takes close to
+30 s on the VM, so this can happen in the demo.
+
 ## Running it
 
 ```bash

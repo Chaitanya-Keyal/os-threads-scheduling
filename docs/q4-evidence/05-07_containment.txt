@@ -4,49 +4,49 @@ THROTTLE is logged with pr_warn, FREEZE and REAP with pr_alert.
 
 == Test 5: containment, untiered (defaults 200 forks / 1000 ms)
 
-# alice terminal (114 "bash: fork: retry: Resource temporarily unavailable" lines omitted)
+# alice terminal (116 "bash: fork: retry: Resource temporarily unavailable" lines omitted)
 alice@osvm:~$ :(){ :|:& };:
 
-[1] 1615
+[1] 1565
 alice@osvm:~$ sleep 12; echo "SHELL STILL ALIVE"; ps -u alice -o pid,pgid,stat,comm | head -5; exit
 
 [1]+  Done                    : | :
 SHELL STILL ALIVE
     PID    PGID STAT COMMAND
-   1535    1535 Ss   systemd
-   1536    1535 S    (sd-pam)
-   1600    1531 S    sshd
-   1601    1601 Ss   bash
+   1489    1489 Ss   systemd
+   1493    1489 S    (sd-pam)
+   1550    1482 S    sshd
+   1551    1551 Ss   bash
 logout
 
 # root: dmesg | grep fork_guard
-[  100.677831] fork_guard: THROTTLE uid=1001 pgid=1614 (>200 forks in 1000 ms)
-[  101.818036] fork_guard: FREEZE   uid=1001 pgid=1614 (SIGSTOP process group)
-[  102.021504] fork_guard: REAP     uid=1001 pgid=1614 (SIGKILL process group)
+[  320.413662] fork_guard: THROTTLE uid=1001 pgid=1564 (>200 forks in 1000 ms)
+[  321.766829] fork_guard: FREEZE   uid=1001 pgid=1564 (SIGSTOP process group)
+[  321.981319] fork_guard: REAP     uid=1001 pgid=1564 (SIGKILL process group)
 
 == Test 6: containment, alice is GOLD
 
 # root: tier set alice gold
 user alice (uid 1001) -> gold
-# alice terminal (110 "bash: fork: retry: Resource temporarily unavailable" lines omitted)
+# alice terminal (107 "bash: fork: retry: Resource temporarily unavailable" lines omitted)
 alice@osvm:~$ :(){ :|:& };:
 
-[1] 2156
+[1] 2177
 alice@osvm:~$ sleep 12; echo "SHELL STILL ALIVE"; ps -u alice -o pid,pgid,stat,comm | head -5; exit
 
 [1]+  Done                    : | :
 SHELL STILL ALIVE
     PID    PGID STAT COMMAND
-   2084    2084 S<s  systemd
-   2085    2084 S<   (sd-pam)
-   2141    2080 S<   sshd
-   2142    2142 S<s  bash
+   2039    2039 S<s  systemd
+   2040    2039 S<   (sd-pam)
+   2162    2108 S<   sshd
+   2163    2163 S<s  bash
 logout
 
 # root: dmesg | grep fork_guard
-[  125.957226] fork_guard: THROTTLE uid=1001 pgid=2155 (>200 forks in 1000 ms)
-[  127.087860] fork_guard: FREEZE   uid=1001 pgid=2155 (SIGSTOP process group)
-[  127.290972] fork_guard: REAP     uid=1001 pgid=2155 (SIGKILL process group)
+[  352.611899] fork_guard: THROTTLE uid=1001 pgid=2176 (>200 forks in 1000 ms)
+[  353.833200] fork_guard: FREEZE   uid=1001 pgid=2176 (SIGSTOP process group)
+[  354.050686] fork_guard: REAP     uid=1001 pgid=2176 (SIGKILL process group)
 
 == Test 7: retuned at runtime, no rebuild
 
@@ -56,22 +56,22 @@ kernel.fg_window_ms = 500
 # alice terminal (21 "bash: fork: retry: Resource temporarily unavailable" lines omitted)
 alice@osvm:~$ :(){ :|:& };:
 
-[1] 2715
+[1] 2748
 alice@osvm:~$ sleep 12; echo "SHELL STILL ALIVE"; ps -u alice -o pid,pgid,stat,comm | head -5; exit
 
 [1]+  Done                    : | :
 SHELL STILL ALIVE
     PID    PGID STAT COMMAND
-   2633    2633 Ss   systemd
-   2634    2633 S    (sd-pam)
-   2700    2629 S    sshd
-   2701    2701 Ss   bash
+   2669    2669 Ss   systemd
+   2670    2669 S    (sd-pam)
+   2733    2665 S    sshd
+   2734    2734 Ss   bash
 logout
 
 # root: dmesg | grep fork_guard
-[  152.308835] fork_guard: THROTTLE uid=1001 pgid=2714 (>50 forks in 500 ms)
-[  153.362619] fork_guard: FREEZE   uid=1001 pgid=2714 (SIGSTOP process group)
-[  153.563362] fork_guard: REAP     uid=1001 pgid=2714 (SIGKILL process group)
+[  379.877507] fork_guard: THROTTLE uid=1001 pgid=2747 (>50 forks in 500 ms)
+[  380.964705] fork_guard: FREEZE   uid=1001 pgid=2747 (SIGSTOP process group)
+[  381.177886] fork_guard: REAP     uid=1001 pgid=2747 (SIGKILL process group)
 
 # root: sysctl -w kernel.fg_threshold=200 kernel.fg_window_ms=1000   (defaults restored)
 # root: sysctl -w kernel.fg_threshold=0

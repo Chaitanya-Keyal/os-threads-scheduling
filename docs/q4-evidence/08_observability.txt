@@ -1,0 +1,60 @@
+Test case 8 (observability), captured on the VM after tests 1-7 and a forkburst run,
+with alice set to GOLD and bob to BRONZE.
+
+# uname -r
+6.14.0-forkguard
+
+# cat /proc/fork_guard
+enabled=1 threshold=200 window_ms=1000 throttle_ms=40 cooldown_s=10 escalate_ms=200
+
+UID     TIER    FORKS   STAGE   THROTTLE  FREEZE  REAP
+1000    SILVER  2       0       0         0       0
+1001    GOLD    0       0       4         3       3
+1002    BRONZE  0       0       0         0       0
+
+# cat /proc/sched_tier
+UID     TIER    NICE
+1001    GOLD    -7
+1002    BRONZE  5
+
+# tier show
+UID     TIER    NICE
+1001    GOLD    -7
+1002    BRONZE  5
+
+enabled=1 threshold=200 window_ms=1000 throttle_ms=40 cooldown_s=10 escalate_ms=200
+
+UID     TIER    FORKS   STAGE   THROTTLE  FREEZE  REAP
+1000    SILVER  2       0       0         0       0
+1001    GOLD    0       0       4         3       3
+1002    BRONZE  0       0       0         0       0
+
+# sysctl -a | grep fg_
+kernel.fg_cooldown_s = 10
+kernel.fg_enabled = 1
+kernel.fg_escalate_ms = 200
+kernel.fg_threshold = 200
+kernel.fg_throttle_ms = 40
+kernel.fg_window_ms = 1000
+
+# dmesg | grep -E "fork_guard|sched_tier"
+[   14.531873] fork_guard: initialised (threshold=200/1000ms, throttle=40ms, cooldown=10s)
+[   14.560492] sched_tier: initialised (gold nice=-7, bronze nice=5)
+[  290.449790] sched_tier: uid=1001 -> GOLD (nice -7)
+[  294.257600] sched_tier: uid=1002 -> BRONZE (nice 5)
+[  303.105638] sched_tier: all users reset to SILVER
+[  320.413662] fork_guard: THROTTLE uid=1001 pgid=1564 (>200 forks in 1000 ms)
+[  321.766829] fork_guard: FREEZE   uid=1001 pgid=1564 (SIGSTOP process group)
+[  321.981319] fork_guard: REAP     uid=1001 pgid=1564 (SIGKILL process group)
+[  345.577097] sched_tier: uid=1001 -> GOLD (nice -7)
+[  352.611899] fork_guard: THROTTLE uid=1001 pgid=2176 (>200 forks in 1000 ms)
+[  353.833200] fork_guard: FREEZE   uid=1001 pgid=2176 (SIGSTOP process group)
+[  354.050686] fork_guard: REAP     uid=1001 pgid=2176 (SIGKILL process group)
+[  377.642024] sched_tier: all users reset to SILVER
+[  379.877507] fork_guard: THROTTLE uid=1001 pgid=2747 (>50 forks in 500 ms)
+[  380.964705] fork_guard: FREEZE   uid=1001 pgid=2747 (SIGSTOP process group)
+[  381.177886] fork_guard: REAP     uid=1001 pgid=2747 (SIGKILL process group)
+[  406.834654] fork_guard: THROTTLE uid=1001 pgid=3000 (>200 forks in 1000 ms)
+[  419.849106] fork_guard: FORGIVE uid=1001 (quiet for 10 s, back to stage 0)
+[  448.743259] sched_tier: uid=1001 -> GOLD (nice -7)
+[  448.749686] sched_tier: uid=1002 -> BRONZE (nice 5)

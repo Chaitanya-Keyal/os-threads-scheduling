@@ -21,7 +21,6 @@ all fork_guard thresholds are sysctls.
 | `linux/include/linux/fork_guard.h` | the hooks called from `fork.c`, `sched/core.c` and `cred.c` |
 | `tier.c` | `tier set <user> <gold\|silver\|bronze>`, `tier reset`, `tier show` |
 | `forkburst.c` | a bursty but legitimate workload: throttled, never frozen |
-| `evidence/` | output captured on the VM: `01-04_tiers.txt`, `05-07_containment.txt`, `08_observability.txt`, `forkburst.txt` |
 
 The patch also edits four existing files. The first three are the hook
 points from the Q4 help document; `commit_creds()` is an extra hook of ours:
@@ -60,6 +59,7 @@ enabled=1 threshold=200 window_ms=1000 throttle_ms=40 cooldown_s=10 escalate_ms=
 
 UID     TIER    FORKS   STAGE   THROTTLE  FREEZE  REAP
 1001    GOLD    0       0       2         2       2
+1002    BRONZE  0       0       0         0       0
 
 $ cat /proc/sched_tier
 UID     TIER    NICE
@@ -91,9 +91,8 @@ make -j$(nproc)
 sudo make modules_install && sudo make install
 ```
 
-On our VM the built tree is `~/kbuild-a2/linux-6.14`. GRUB is set to boot
-`6.14.0-forkguard` by default through `GRUB_DEFAULT` in `/etc/default/grub`.
-The assignment 1 kernel `6.14.0-setnice` is still under "Advanced options".
+After the reboot, select the 6.14.0-forkguard kernel in GRUB if it is not the
+default, then:
 
 ```bash
 uname -r                              # 6.14.0-forkguard
@@ -103,12 +102,15 @@ sudo install tier forkburst /usr/local/bin/
 sudo apt install -y forkstat
 ```
 
-The test cases need two ordinary users. The VM has `alice` (uid 1001) and
-`bob` (uid 1002), with passwords `alice` and `bob`.
+```
+[    4.499579] fork_guard: initialised (threshold=200/1000ms, throttle=40ms, cooldown=10s)
+[    4.512240] sched_tier: initialised (gold nice=-7, bronze nice=5)
+```
 
 ## Test cases
 
-The outputs captured for each step are in `evidence/`.
+The test cases need two ordinary users; the examples use `alice` (uid 1001)
+and `bob` (uid 1002).
 
 **Run the tier tests (1-4) from one root shell.** Both workloads must be
 started with `sudo -u` from the same root shell, as the problem statement
@@ -130,6 +132,12 @@ gets an equal share no matter what the nice values inside it are.
    run `:(){ :|:& };:`. dmesg shows THROTTLE, FREEZE and REAP within 0.5-2 s.
    The bomb dies, and alice's prompt keeps working without killing the
    terminal.
+
+   ```
+   [  100.677831] fork_guard: THROTTLE uid=1001 pgid=1614 (>200 forks in 1000 ms)
+   [  101.818036] fork_guard: FREEZE   uid=1001 pgid=1614 (SIGSTOP process group)
+   [  102.021504] fork_guard: REAP     uid=1001 pgid=1614 (SIGKILL process group)
+   ```
 6. **Containment, GOLD.** `tier set alice gold` and repeat 5. The ladder is
    identical, because `fg_check_fork()` never looks at tiers.
 7. **Retune at runtime.** `sysctl -w kernel.fg_threshold=50` and
@@ -139,8 +147,7 @@ gets an equal share no matter what the nice values inside it are.
 8. **Observability.** `cat /proc/fork_guard`, `cat /proc/sched_tier`,
    `tier show`, and `dmesg | grep -E "fork_guard|sched_tier"`.
 
-To see graduated containment, run `forkburst` as alice
-(`evidence/forkburst.txt`). It forks 300
-children as fast as it can. Fork 201 fails with EAGAIN (THROTTLE), it backs
-off for 1.1 s and finishes. It is never frozen, and it is forgiven after the
-cooldown.
+To see graduated containment, run `forkburst` as alice. It forks 300
+children as fast as it can. Around fork 200 one fails with EAGAIN (THROTTLE),
+it backs off for 1.1 s and finishes. It is never frozen, and it is forgiven
+after the cooldown.

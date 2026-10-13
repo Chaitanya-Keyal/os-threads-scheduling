@@ -181,13 +181,14 @@ each with equal cgroup weight. That is per-user fairness above the task
 level, and nice values could not change the split. That is not a bug in the
 tier code; it is how group scheduling is designed. We measured it: with
 two separate ssh logins, a GOLD `yes` at nice -7 still got only about 50%
-(see `q4_fork_guard/evidence/01-04_tiers.txt`).
+(see `q4-evidence/01-04_tiers.txt`).
 
 ## Mechanism 3: observability
 
 * `/proc/fork_guard` (0444, `proc_create_single` + `seq_file`): the live
   tunables, then per user the tier, forks in the current window, stage, and
-  cumulative throttle/freeze/reap counts. Reading it also applies a pending
+  cumulative throttle/freeze/reap counts. A user gets a row on their first
+  fork or when they are given a tier. Reading it also applies a pending
   cooldown, so STAGE is accurate.
 * `/proc/sched_tier`: `UID TIER NICE` for every non-SILVER user.
 * `tier show` prints both files. If nobody is tiered it prints
@@ -205,7 +206,9 @@ uses is `st_tier_name()`, and only to print the TIER column in
 user's bomb taking exactly the same path as an untiered one.
 
 Lock order is always `fg_lock` then `st_lock` (only in the `/proc` show).
-`sched_tier.c` never takes `fg_lock`, so the two locks cannot deadlock.
+`sched_tier.c` calls `fg_track()` after it has released `st_lock`, so that a
+newly tiered user gets a row in `/proc/fork_guard`. It never takes `fg_lock`
+while holding its own lock, so the two locks cannot deadlock.
 
 ## Spinlocks without irqsave
 

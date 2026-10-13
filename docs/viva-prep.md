@@ -130,6 +130,11 @@ programs.
 * **Why does the I/O-bound program ignore the quantum?** Each child blocks on
   `fsync` long before using up even 1 ms, so the quantum timer never fires.
   Elapsed time is set by the disk.
+* **What happens when `timeout 30` fires?** `timeout` sends SIGTERM to the
+  process group. The children die. The parent has an empty handler (installed
+  after forking, so the children do not inherit it), which makes its `read()`
+  return. It reaps the children and prints what it has, with
+  `(stopped early: N of 8 children finished)`.
 * **Why `CLOCK_MONOTONIC`?** It never jumps (no NTP or `date` changes), and
   it is the same clock in every process, so timestamps from different
   processes can be subtracted.
