@@ -1,4 +1,4 @@
-Test case 8 (observability), captured on the VM after tests 1-7 and a forkburst run,
+Test case 8 (observability), captured on the VM after tests 1-7 and one throttled burst,
 with alice set to GOLD and bob to BRONZE.
 
 # uname -r

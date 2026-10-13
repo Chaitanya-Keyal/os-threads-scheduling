@@ -1,0 +1,16 @@
+De-escalation, captured on the VM (kernel 6.14.0-forkguard): a short burst of
+forks is throttled, not frozen or killed, and forgiven after the cooldown.
+
+# root: sysctl -w kernel.fg_threshold=50
+kernel.fg_threshold = 50
+
+# alice: for i in $(seq 60); do /bin/true; done; echo "loop finished"
+bash: fork: retry: Resource temporarily unavailable
+loop finished
+
+# root: dmesg | grep fork_guard
+[  670.840113] fork_guard: THROTTLE uid=1001 pgid=2975 (>50 forks in 1000 ms)
+[  683.594453] fork_guard: FORGIVE uid=1001 (quiet for 10 s, back to stage 0)
+
+# root: sysctl -w kernel.fg_threshold=200
+kernel.fg_threshold = 200

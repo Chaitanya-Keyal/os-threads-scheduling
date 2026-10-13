@@ -104,9 +104,12 @@ sysctl -w kernel.fg_threshold=200 kernel.fg_window_ms=1000
 tier reset
 ```
 
-**Graduated, not just a kill switch:** as alice run `forkburst`. One THROTTLE line appears,
-no FREEZE. The program backs off and finishes all 300 forks. After 10 s,
-`/proc/fork_guard` shows stage 0 again.
+**Graduated, not just a kill switch:** as root run
+`sysctl -w kernel.fg_threshold=50`, then as alice
+`for i in $(seq 60); do /bin/true; done`. One THROTTLE line appears and no
+FREEZE. bash prints `fork: retry` once and the loop finishes. After 10 s a
+FORGIVE line appears and `/proc/fork_guard` shows stage 0 again. Restore with
+`sysctl -w kernel.fg_threshold=200`.
 
 **Observability (test 8):** `cat /proc/fork_guard`, `cat /proc/sched_tier`,
 `tier show`, `sysctl -a | grep fg_`.

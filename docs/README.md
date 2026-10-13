@@ -13,5 +13,6 @@ scheduling or kernel hooks are new to you.
 | `03-sudoku.md` | Problem 3: 27 validators, 9 heatmap threads, hotspots and repair hints |
 | `04-fork-guard.md` | Problem 4: the fork-storm ladder, CPU tiers and the design decisions |
 | `q4-evidence/` | Problem 4: output of test cases 1-8 captured on the VM |
+| `header.pdf`, `q4-help-doc.pdf` | The handouts: workload headers for Problem 2 and the kernel help document for Problem 4 |
 | `demo.md` | Step-by-step demo script for all four problems |
 | `modifications.md` | Where to edit for the changes likely to be asked in the viva |

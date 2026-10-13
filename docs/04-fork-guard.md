@@ -17,7 +17,7 @@ Modify Linux 6.x so that:
    containment.
 
 Source: `q4_fork_guard/linux/` (about 610 lines), `fork_guard.patch`, and the
-`tier` and `forkburst` tools.
+`tier` tool.
 
 ## Where the kernel is hooked
 

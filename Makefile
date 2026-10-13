@@ -9,8 +9,7 @@ PROGRAMS = q1_report_card/report_card \
            q2_rt_sched/cpu_bound \
            q2_rt_sched/io_bound \
            q3_sudoku/sudoku_analyzer \
-           q4_fork_guard/tier \
-           q4_fork_guard/forkburst
+           q4_fork_guard/tier
 
 all: $(PROGRAMS)
 

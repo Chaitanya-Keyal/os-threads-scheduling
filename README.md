@@ -19,7 +19,7 @@ script are in `docs/`.
 | `q1_report_card/` | 1 - multithreaded student report cards          | `report_card` |
 | `q2_rt_sched/`    | 2 - SCHED_RR vs SCHED_FIFO measurements         | `cpu_bound`, `io_bound`, `run_all.sh`, `results.txt` |
 | `q3_sudoku/`      | 3 - Sudoku conflict analyzer and repair advisor | `sudoku_analyzer` |
-| `q4_fork_guard/`  | 4 - fork storm containment and CPU tiers (kernel) | kernel patch + `tier`, `forkburst` |
+| `q4_fork_guard/`  | 4 - fork storm containment and CPU tiers (kernel) | kernel patch + `tier` |
 
 Tested on Ubuntu 24.04 (VirtualBox VM, 4 cores, 4 GB) with gcc 13.3. The
 kernel for Problem 4 is Linux 6.14.

@@ -20,7 +20,6 @@ all fork_guard thresholds are sysctls.
 | `linux/kernel/sched_tier.c` | tier table, re-nicing, `/proc/sched_tier` |
 | `linux/include/linux/fork_guard.h` | the hooks called from `fork.c`, `sched/core.c` and `cred.c` |
 | `tier.c` | `tier set <user> <gold\|silver\|bronze>`, `tier reset`, `tier show` |
-| `forkburst.c` | a bursty but legitimate workload: throttled, never frozen |
 
 The patch also edits four existing files. The first three are the hook
 points from the Q4 help document; `commit_creds()` is an extra hook of ours:
@@ -97,8 +96,8 @@ default, then:
 ```bash
 uname -r                              # 6.14.0-forkguard
 sudo dmesg | grep -E "fork_guard|sched_tier"
-make -C .. q4_fork_guard/tier q4_fork_guard/forkburst
-sudo install tier forkburst /usr/local/bin/
+gcc -Wall -Wextra -O2 -o tier tier.c
+sudo install tier /usr/local/bin/
 sudo apt install -y forkstat
 ```
 
@@ -147,7 +146,7 @@ gets an equal share no matter what the nice values inside it are.
 8. **Observability.** `cat /proc/fork_guard`, `cat /proc/sched_tier`,
    `tier show`, and `dmesg | grep -E "fork_guard|sched_tier"`.
 
-To see graduated containment, run `forkburst` as alice. It forks 300
-children as fast as it can. Around fork 200 one fails with EAGAIN (THROTTLE),
-it backs off for 1.1 s and finishes. It is never frozen, and it is forgiven
-after the cooldown.
+To see de-escalation, lower the threshold (`sysctl -w kernel.fg_threshold=50`)
+and run a short burst as alice: `for i in $(seq 60); do /bin/true; done`.
+dmesg shows one THROTTLE, the loop still finishes, and about 10 s later a
+FORGIVE line returns alice to stage 0. Nothing is frozen or killed.
