@@ -115,6 +115,14 @@ static struct fg_user *fg_find(kuid_t uid, bool create)
 	return free;
 }
 
+/* Called when a user is given a tier, so /proc/fork_guard lists the user. */
+void fg_track(kuid_t uid)
+{
+	spin_lock(&fg_lock);
+	fg_find(uid, true);
+	spin_unlock(&fg_lock);
+}
+
 /* A throttled user who stayed under the threshold long enough. */
 static void fg_try_forgive(struct fg_user *u, s64 now)
 {

@@ -155,6 +155,7 @@ static int st_set(kuid_t uid, enum tier t)
 	spin_unlock(&st_lock);
 	if (ret)
 		return ret;
+	fg_track(uid);
 
 	if (uid_valid(demoted)) {
 		pr_info("sched_tier: uid=%u GOLD -> SILVER (only one GOLD user)\n",

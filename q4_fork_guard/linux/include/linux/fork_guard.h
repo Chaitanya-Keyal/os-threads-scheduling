@@ -15,6 +15,9 @@ struct task_struct;
 /* Called from kernel_clone(): 0 to allow the fork, -EAGAIN to refuse it. */
 int fg_check_fork(struct kernel_clone_args *args);
 
+/* Called when a user is given a tier, so /proc/fork_guard lists the user. */
+void fg_track(kuid_t uid);
+
 /* Called from sched_fork(): true and the nice value if p's user is tiered. */
 bool st_fork_nice(struct task_struct *p, int *nice);
 
