@@ -8,9 +8,6 @@ q4_fork_guard/forkburst
 *.o
 *.tar.gz
 
-# Assignment handouts
-*.pdf
-
 # Editor / OS noise
 .vscode/
 .idea/
