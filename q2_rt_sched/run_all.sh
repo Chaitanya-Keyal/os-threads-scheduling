@@ -27,7 +27,7 @@ trap 'sysctl -qw kernel.sched_rr_timeslice_ms=$old; rm -rf "$tmp"' EXIT
 
 median_run() { # median_run <command...>
     for i in $(seq $RUNS); do
-        "$@" >"$tmp/$i" || echo "  (stopped by timeout 30)" >>"$tmp/$i"
+        "$@" >"$tmp/$i"
         echo "$(grep -oP 'Total Elapsed Time:\s+\K[\d.]+' "$tmp/$i") $i"
     done | sort -n | sed -n "$(((RUNS + 1) / 2))p" | {
         read -r _ i

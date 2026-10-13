@@ -9,6 +9,9 @@
  * against its reference timestamp, and reads the children's context switch
  * counts with getrusage(RUSAGE_CHILDREN) once all of them are reaped.
  *
+ * If the run is cut short by `timeout` (SIGTERM), the parent stops waiting
+ * and reports the children that had finished by then.
+ *
  * The scheduling policy is not set here: the program is started under
  * `chrt -r` or `chrt -f` and the children inherit the policy on fork().
  */
@@ -16,6 +19,7 @@
 #define RT_BENCH_H
 
 #include <sched.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/resource.h>
@@ -47,7 +51,11 @@ static void print_policy(void) {
                policy == SCHED_FIFO ? "SCHED_FIFO" : "SCHED_OTHER");
 }
 
+/* Only has to exist: a handled signal makes the parent's read() return. */
+static void on_sigterm(int sig) { (void)sig; }
+
 static int run_bench(void (*task)(int)) {
+    struct sigaction sa = {.sa_handler = on_sigterm}; /* no SA_RESTART */
     struct timespec ref, done;
     struct child_report rep;
     struct rusage usage;
@@ -79,6 +87,10 @@ static int run_bench(void (*task)(int)) {
     }
     close(fd[1]); /* read() returns 0 once every child has exited */
 
+    /* `timeout 30` stops a run with SIGTERM. The children were forked before
+     * this, so they keep the default action and are terminated. */
+    sigaction(SIGTERM, &sa, NULL);
+
     while (read(fd[0], &rep, sizeof(rep)) == sizeof(rep)) {
         resp = ms_between(ref, rep.start);
         turn = ms_between(ref, rep.end);
@@ -93,23 +105,22 @@ static int run_bench(void (*task)(int)) {
     clock_gettime(CLOCK_MONOTONIC, &done);
     getrusage(RUSAGE_CHILDREN, &usage); /* totals of all reaped children */
 
-    if (got == 0) {
-        fprintf(stderr, "no child reported back\n");
-        return EXIT_FAILURE;
-    }
     double elapsed = ms_between(ref, done) / 1e3;
 
     print_policy();
     printf("  Involuntary Context Switches: %ld\n", usage.ru_nivcsw);
     printf("  Voluntary Context Switches:   %ld\n", usage.ru_nvcsw);
-    printf("  Average Response Time:        %.2fms\n", sum_resp / got);
-    printf("  Maximum Response Time:        %.2fms\n", max_resp);
-    printf("  Average Turnaround Time:      %.2fms\n", sum_turn / got);
-    printf("  Maximum Turnaround Time:      %.2fms\n", max_turn);
+    if (got > 0) {
+        printf("  Average Response Time:        %.2fms\n", sum_resp / got);
+        printf("  Maximum Response Time:        %.2fms\n", max_resp);
+        printf("  Average Turnaround Time:      %.2fms\n", sum_turn / got);
+        printf("  Maximum Turnaround Time:      %.2fms\n", max_turn);
+    }
     printf("  Throughput:                   %.2f children/s\n", got / elapsed);
     printf("  Total Elapsed Time:           %.2fs\n", elapsed);
     if (got != NUM_CHILDREN)
-        printf("  (only %d of %d children reported)\n", got, NUM_CHILDREN);
+        printf("  (stopped early: %d of %d children finished)\n", got,
+               NUM_CHILDREN);
     return EXIT_SUCCESS;
 }
 
